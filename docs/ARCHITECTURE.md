@@ -9,7 +9,7 @@
 ## 1. Business problem
 
 1. **Source of truth A:** Live supplier catalog from **Shopify Storefront JSON** on `1-caviar.ae`, optionally restricted to specific **collections** (e.g. caviar + seafood).
-2. **Source of truth B:** **Gastronom** product export (JSON array), produced elsewhere (e.g. automation) and saved as `Output/from_gastronom.json` or appended via **HTTP webhook**.
+2. **Source of truth B:** **Gastronom** product export (JSON array), produced elsewhere (e.g. automation) and saved as `Output/from_gastronom.json` or synced via **HTTP webhook**.
 3. **Gap:** Handles and titles differ (EN supplier vs RU/other target fields). Operators need **suggested matches**, **confirmation**, and **reports** without blindly overwriting production systems.
 
 This repo **does not** call Shopify Admin GraphQL for writes in the review flow; it persists local JSON mapping files for downstream processes.
@@ -53,7 +53,7 @@ This repo **does not** call Shopify Admin GraphQL for writes in the review flow;
 └──────────────────────────┘
 ```
 
-**Secondary HTTP service:** `server.js` on port **3000** appends POST bodies to `Output/from_gastronom.json` (merge with existing array). Use for integration platforms; validate auth at a reverse proxy in production.
+**Secondary HTTP service:** `server.js` on port **3000** accepts a **full product array** from Make (or similar). It **upserts by `shopify_product_id` (preferred) or `handle`**: same key → row replaced (price, `Product Status`, etc.); new key → added; keys missing from the payload are **removed** from the file (snapshot). **`Output/product_mapping.json` is not modified** — supplier↔GID confirmations stay intact. **Safety:** if the saved file already has ≥`GASTRONOM_SYNC_PROTECT_MIN_EXISTING` keyed rows (default **5**) and the new batch would **shrink** keyed rows below **max(2, ceil(existing × GASTRONOM_SYNC_SHRINK_MIN_FRACTION))** (default fraction **0.2**), the write is **rejected** with HTTP **409** (avoids Make sending one row and wiping the catalog). Override with **`?force=1`** or header **`x-gastronom-force-replace: 1`**. Before each successful write, the previous file is copied to **`Output/from_gastronom.json.bak`** (name overridable via `GASTRONOM_BACKUP_NAME`). Validate auth at a reverse proxy in production.
 
 ---
 
@@ -66,7 +66,7 @@ This repo **does not** call Shopify Admin GraphQL for writes in the review flow;
 | `src/product-match.js` | **Single core library:** paths (`PATHS`), load/save mapping & state, filter, normalize, scoring, report rows, unpaired helpers, CSV writer. |
 | `src/review-server.js` | Express app: `/api/report`, `/api/unpaired-gastronom`, … (see §6), serves `public/review.html`. Handles **EADDRINUSE** with a clear message. |
 | `public/review.html` | Client UI: navigate supplier scope, suggestions, confirm/no-match/manual search, modals for unpaired Gastronom/supplier. Uses `API` base when not served from `:3001`. |
-| `src/server.js` | Webhook: `POST /gastronom` (and legacy `/shopify`) → merge into `Output/from_gastronom.json`. |
+| `src/server.js` | Webhook: `POST /gastronom` (and legacy `/shopify`) → **full-catalog upsert** into `Output/from_gastronom.json` (see §2 diagram). |
 | `src/normalize-from-gastronom.js` | Reads `from_gastronom.json`, writes `from_gastronom.normalized.json` (flattened numeric fields). |
 | `src/matching-summary-report.js` | Prints and writes `Output/matching_summary_report.txt`. |
 | `src/prune-product-mapping.js` | Drops `product_mapping.json` keys whose handles no longer exist in `products_all.json`. |
@@ -127,9 +127,9 @@ Updated by **Confirm** in the UI (`POST /api/confirm`). This is the **confirmed*
    - Else **auto by handle** if Gastronom has same `handle`
    - Else **needs review** with scored suggestions
 
-**Unpaired Gastronom:** Gastronom rows with no supplier handle match **and** no mapping from a supplier handle still in `products_all.json` pointing to that GID — see `getUnpairedGastronomProducts()`.
+**Unpaired Gastronom:** Gastronom rows with no handle match **and** no mapping from supplier handles in the chosen scope pointing to that GID — see `getUnpairedGastronomProducts()`. Default scope matches the main review list (`filterSupplierCaviarSeafood`). Set **`UNPAIRED_GASTRONOM_FULL_SUPPLIER=1`** when starting the review server to use **all** `products_all` rows instead (legacy “any URL on site” behavior).
 
-**Unpaired supplier:** Supplier rows with no shared handle and no mapping GID present in Gastronom export — see `getUnpairedSupplierProducts()`.
+**Unpaired supplier:** **In-scope** supplier rows with no shared handle and no mapping GID present in Gastronom export — see `getUnpairedSupplierProducts()`.
 
 ---
 
@@ -138,9 +138,9 @@ Updated by **Confirm** in the UI (`POST /api/confirm`). This is the **confirmed*
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/` | Serves `review.html` |
-| GET | `/api/report` | Full matching report `{ rows, shopify, supplierCount }` |
-| GET | `/api/unpaired-gastronom` | Gastronom products not linked to current supplier file |
-| GET | `/api/unpaired-supplier` | Supplier products not linked to Gastronom export |
+| GET | `/api/report` | Full matching report `{ rows, shopify, supplierCount, mappingAudit }` — `mappingAudit` flags duplicate GIDs / all handles pointing to one product (bad `product_mapping.json`) |
+| GET | `/api/unpaired-gastronom` | Gastronom products not linked to in-scope supplier rows (caviar/seafood filter) |
+| GET | `/api/unpaired-supplier` | In-scope supplier products not linked to Gastronom export |
 | GET | `/api/search?q=` | Search Gastronom list |
 | GET | `/api/report.csv` | Download CSV |
 | GET | `/api/final-report` | JSON summary (confirmed / new / unmatched) |

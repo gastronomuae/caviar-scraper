@@ -184,6 +184,21 @@
     .st-active { background: #1f3d2a; color: var(--ok); }
     .st-draft { background: #3d3420; color: var(--warn); }
     .st-other { background: #2a3140; color: var(--muted); }
+    #mapping-warn {
+      display: none;
+      margin: 0 20px 12px;
+      max-width: 1200px;
+      margin-left: auto;
+      margin-right: auto;
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--bad);
+      background: #3d2020;
+      color: var(--text);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+    #mapping-warn code { font-size: 0.85em; }
     .modal-head {
       display: flex;
       align-items: flex-start;
@@ -216,6 +231,7 @@
     <button type="button" onclick="showFinalReport()">Final summary JSON</button>
   </header>
   <main>
+    <div id="mapping-warn"></div>
     <div class="nav-row">
       <button type="button" onclick="prev()">← Previous</button>
       <button type="button" onclick="next()">Next →</button>
@@ -431,6 +447,28 @@
           return;
         }
         rows = data.rows || [];
+        const mapWarn = document.getElementById('mapping-warn');
+        const audit = data.mappingAudit;
+        if (audit && audit.warning_all_same_gid) {
+          mapWarn.style.display = 'block';
+          mapWarn.innerHTML =
+            '<strong>Mapping looks corrupted:</strong> every confirmed supplier handle in this list points to the ' +
+            'same Shopify product (<code>' +
+            escapeHtml(String(audit.duplicate_gid_groups[0]?.shopify_product_id || '')) +
+            '</code>). ' +
+            'That breaks matching and the “unpaired Gastronom” count. ' +
+            'Restore <code>Output/product_mapping.json</code> from backup or git, or clear bad entries and re-confirm each product.';
+        } else if (audit && audit.duplicate_gid_groups && audit.duplicate_gid_groups.length > 0) {
+          mapWarn.style.display = 'block';
+          mapWarn.innerHTML =
+            '<strong>Duplicate GIDs in mapping:</strong> ' +
+            audit.duplicate_gid_groups.length +
+            ' Shopify product ID(s) are shared by multiple supplier handles. ' +
+            'Check <code>Output/product_mapping.json</code> — each handle should usually map to its own product GID.';
+        } else {
+          mapWarn.style.display = 'none';
+          mapWarn.innerHTML = '';
+        }
         const max = Math.max(0, rows.length - 1);
         if (reset) {
           idx = 0;
@@ -525,10 +563,15 @@
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         sum.innerHTML =
-          `Supplier products in file: <strong>${data.supplier_product_count}</strong> · ` +
+          (data.unpaired_gastronom_scope === 'full_products_all'
+            ? `Supplier rows (full <code>products_all</code> — set by env): <strong>${data.supplier_product_count}</strong> · `
+            : `Supplier rows (caviar/seafood, same as main list): <strong>${data.supplier_product_count}</strong> · `) +
           `Unpaired Gastronom rows: <strong>${data.count}</strong> ` +
           `(ACTIVE <strong>${data.active}</strong>, DRAFT <strong>${data.draft}</strong>). ` +
-          `Not linked = no matching supplier handle and no mapping from a supplier handle you still have.`;
+          `Not linked = no shared handle with those supplier rows and no confirmed mapping from them. ` +
+          (data.unpaired_gastronom_scope !== 'full_products_all'
+            ? '<span style="font-size:0.8rem;">Tip: use env <code>UNPAIRED_GASTRONOM_FULL_SUPPLIER=1</code> to compare against all supplier URLs (legacy).</span>'
+            : '');
         const list = [...(data.products || [])].sort((a, b) => {
           const d = unpairedStatusOrder(a.status) - unpairedStatusOrder(b.status);
           if (d !== 0) return d;
@@ -569,7 +612,7 @@
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         sum.innerHTML =
-          'Supplier products in file: <strong>' +
+          'In-scope supplier rows (caviar/seafood filter): <strong>' +
           data.supplier_product_count +
           '</strong> · ' +
           'Not in Gastronom export (no shared handle, no mapping to a GID in from_gastronom.json): <strong>' +

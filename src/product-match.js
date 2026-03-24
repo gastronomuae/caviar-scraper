@@ -81,6 +81,16 @@ function filterSupplierCaviarSeafood(products) {
   });
 }
 
+/**
+ * Rows from products_all used to decide if a Gastronom product is "linked" for {@link getUnpairedGastronomProducts}.
+ * Default: same caviar/seafood subset as the main report. Set env UNPAIRED_GASTRONOM_FULL_SUPPLIER=1 to use every
+ * supplier row (legacy: match any handle / mapping on the full catalog).
+ */
+function supplierScopeForUnpairedGastronom(supplierArr) {
+  if (process.env.UNPAIRED_GASTRONOM_FULL_SUPPLIER === '1') return supplierArr;
+  return filterSupplierCaviarSeafood(supplierArr);
+}
+
 function normalizeSupplier(product) {
   const handle = extractHandleFromUrl(product.url);
   const v0 = (product.variants && product.variants[0]) || {};
@@ -229,6 +239,36 @@ function saveState(state) {
 }
 
 /**
+ * Detect corrupted mapping where many in-scope supplier handles share one GID (e.g. bad bulk edit).
+ */
+function auditInScopeMapping(supplierNorm, mapping) {
+  /** @type {Map<string, string[]>} */
+  const byGid = new Map();
+  for (const s of supplierNorm) {
+    const h = s.handle;
+    if (!h) continue;
+    const gid = mapping[h];
+    if (!gid) continue;
+    if (!byGid.has(gid)) byGid.set(gid, []);
+    byGid.get(gid).push(h);
+  }
+  const duplicateGroups = [];
+  let mappedHandleCount = 0;
+  for (const [gid, handles] of byGid) {
+    mappedHandleCount += handles.length;
+    if (handles.length > 1) duplicateGroups.push({ shopify_product_id: gid, handles });
+  }
+  const uniqueGids = byGid.size;
+  const warning_all_same_gid = uniqueGids === 1 && mappedHandleCount >= 2;
+  return {
+    mapped_handle_count: mappedHandleCount,
+    unique_mapped_gid_count: uniqueGids,
+    duplicate_gid_groups: duplicateGroups,
+    warning_all_same_gid
+  };
+}
+
+/**
  * Build full matching report rows for supplier + shopify.
  */
 function buildMatchingReport() {
@@ -291,7 +331,9 @@ function buildMatchingReport() {
     });
   }
 
-  return { rows, shopify, supplierCount: supplierNorm.length };
+  const mappingAudit = auditInScopeMapping(supplierNorm, mapping);
+
+  return { rows, shopify, supplierCount: supplierNorm.length, mappingAudit };
 }
 
 function rowToCsvLine(cells) {
@@ -378,13 +420,16 @@ function finalReport() {
 }
 
 /**
- * Gastronom export (from_gastronom.json) rows not linked to current products_all: no mapping GID hit and no shared handle.
+ * Gastronom export (from_gastronom.json) rows not linked to in-scope supplier rows
+ * (same filter as buildMatchingReport: caviar/seafood): no mapping GID from those
+ * handles and no shared handle with that subset.
  */
 function getUnpairedGastronomProducts() {
   const supplierRaw = loadJson(PATHS.supplier);
   const supplierArr = Array.isArray(supplierRaw) ? supplierRaw : [];
+  const supplierForUnpaired = supplierScopeForUnpairedGastronom(supplierArr);
   const supplierHandles = new Set(
-    supplierArr.map((p) => extractHandleFromUrl(p.url)).filter(Boolean)
+    supplierForUnpaired.map((p) => extractHandleFromUrl(p.url)).filter(Boolean)
   );
 
   const mapping = loadMapping();
@@ -428,29 +473,33 @@ function getUnpairedGastronomProducts() {
 
   const active = products.filter((p) => String(p.status || '').trim().toUpperCase() === 'ACTIVE').length;
   const draft = products.filter((p) => String(p.status || '').trim().toUpperCase() === 'DRAFT').length;
+  const scope =
+    process.env.UNPAIRED_GASTRONOM_FULL_SUPPLIER === '1' ? 'full_products_all' : 'caviar_seafood';
   return {
     count: products.length,
     active,
     draft,
-    supplier_product_count: supplierArr.length,
+    supplier_product_count: supplierForUnpaired.length,
+    unpaired_gastronom_scope: scope,
     products
   };
 }
 
 /**
- * Supplier (products_all) rows not linked to current Gastronom export (from_gastronom):
+ * In-scope supplier (products_all) rows not linked to current Gastronom export (from_gastronom):
  * no shared handle and no saved mapping to a GID that appears in the export.
  */
 function getUnpairedSupplierProducts() {
   const supplierRaw = loadJson(PATHS.supplier);
   const supplierArr = Array.isArray(supplierRaw) ? supplierRaw : [];
+  const supplierFiltered = filterSupplierCaviarSeafood(supplierArr);
   const shopify = loadShopifyNormalized();
   const gastronomGids = new Set(shopify.map((s) => s.shopify_product_id).filter(Boolean));
   const gastronomHandles = new Set(shopify.map((s) => s.handle).filter(Boolean));
   const mapping = loadMapping();
 
   const products = [];
-  for (const p of supplierArr) {
+  for (const p of supplierFiltered) {
     const h = extractHandleFromUrl(p.url);
     if (!h) continue;
     const gid = mapping[h];
@@ -475,7 +524,7 @@ function getUnpairedSupplierProducts() {
 
   return {
     count: products.length,
-    supplier_product_count: supplierArr.length,
+    supplier_product_count: supplierFiltered.length,
     products
   };
 }
@@ -496,5 +545,6 @@ module.exports = {
   nameSimilarityScore,
   combinedSuggestionScore,
   getUnpairedGastronomProducts,
-  getUnpairedSupplierProducts
+  getUnpairedSupplierProducts,
+  auditInScopeMapping
 };
