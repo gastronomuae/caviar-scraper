@@ -1,0 +1,46 @@
+{
+  "name": "Beluga Premium Azerbaijan",
+  "description": "Beluga caviar is the most sought-after of all types of caviar - a traditionally elite delicacy with a pronounced nutty taste. The caviar pearls are soft and delicate, 3-4 mm in size, colored anthracite to steel gray, taste wonderfully creamy and literally melt in the mouth. Beluga (lat. Huso huso) is the largest fish of the sturgeon family, in the good old days, fishermen caught fish up to five meters long and weighing 1000 kg. The caviar hive was up to 200 kg. Such giants are rarely found in aquaculture. 100 kg heavy specimens are the rule. Beluga females spawn for the first time in 15-20 years, so caviar is the rarest and most expensive. Beluga caviar is best enjoyed neat with a glass of champagne. Ideal for special occasions or as an unforgettable gift.",
+  "image": "https://cdn.shopify.com/s/files/1/0791/8010/3977/files/Beluga-Premium_1_1.jpg?v=1713108308",
+  "url": "https://1-caviar.ae/products/beluga-premium",
+  "regular_price": "650.00 AED",
+  "promotional_price": "487.00 AED",
+  "variants": [
+    {
+      "variant_id": 49523138167081,
+      "weight": "50",
+      "regular_price": "650.00 AED",
+      "promotional_price": "487.00 AED",
+      "qty": null,
+      "unlimited_stock": true,
+      "out_of_stock": false,
+      "limited_stock": false,
+      "available": true,
+      "url": "https://1-caviar.ae/products/beluga-premium?variant=49523138167081"
+    },
+    {
+      "variant_id": 46170683539753,
+      "weight": "125",
+      "regular_price": "1625.00 AED",
+      "promotional_price": "1218.00 AED",
+      "qty": null,
+      "unlimited_stock": true,
+      "out_of_stock": false,
+      "limited_stock": false,
+      "available": true,
+      "url": "https://1-caviar.ae/products/beluga-premium?variant=46170683539753"
+    },
+    {
+      "variant_id": 46170683605289,
+      "weight": "500",
+      "regular_price": "6500.00 AED",
+      "promotional_price": "4875.00 AED",
+      "qty": 4,
+      "unlimited_stock": false,
+      "out_of_stock": false,
+      "limited_stock": true,
+      "available": true,
+      "url": "https://1-caviar.ae/products/beluga-premium?variant=46170683605289"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "caviar-scraper",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js",
+    "fetch": "node index.js",
+    "fetch:products-all": "node src/fetch-products-all-1caviar.js",
+    "review": "node src/review-server.js",
+    "match:csv": "node -e \"require('./src/product-match').writeMatchingReportCsv(); console.log('wrote Output/matching_report.csv')\"",
+    "mapping:prune": "node src/prune-product-mapping.js",
+    "match:summary": "node src/matching-summary-report.js",
+    "normalize:gastronom": "node src/normalize-from-gastronom.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.13.6",
+    "express": "^5.2.1"
+  }
+}

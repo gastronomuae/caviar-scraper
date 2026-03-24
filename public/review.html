@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Supplier ↔ Gastronom match review</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3d8bfd;
+      --ok: #3fb950;
+      --warn: #d4a72c;
+      --bad: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, Segoe UI, Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 12px 20px;
+      border-bottom: 1px solid #2d3a4f;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 1rem; font-weight: 600; margin: 0; }
+    header .meta { font-size: 0.85rem; color: var(--muted); }
+    button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid #3d4f6f;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.danger { border-color: var(--bad); color: var(--bad); }
+    button.success { border-color: var(--ok); color: var(--ok); }
+    main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    .nav-row { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--panel);
+      border-radius: 10px;
+      padding: 16px;
+      border: 1px solid #2d3a4f;
+    }
+    .panel h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 12px; }
+    .supplier-img, .match-img {
+      width: 100%;
+      max-height: 200px;
+      object-fit: contain;
+      background: #0f1419;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+    .line { margin: 6px 0; font-size: 0.95rem; }
+    .line strong { color: var(--muted); font-weight: 500; display: inline-block; min-width: 90px; }
+    .status-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      margin-bottom: 12px;
+    }
+    .st-confirmed { background: #1f3d2a; color: var(--ok); }
+    .st-handle { background: #2d3a1f; color: #a3e635; }
+    .st-review { background: #3d3420; color: var(--warn); }
+    .st-none { background: #3d2020; color: var(--bad); }
+    .match-card {
+      border: 1px solid #2d3a4f;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .match-card:hover { border-color: var(--accent); }
+    .match-card.selected { border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok); }
+    .score { font-size: 0.85rem; color: var(--accent); }
+    .price-diff { font-size: 0.8rem; margin-top: 4px; }
+    .price-diff.warn { color: var(--warn); }
+    .price-diff.ok { color: var(--muted); }
+    .modal-bg {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-bg.open { display: flex; }
+    .modal {
+      background: var(--panel);
+      border-radius: 12px;
+      padding: 20px;
+      max-width: 520px;
+      width: 100%;
+      max-height: 85vh;
+      overflow: auto;
+      border: 1px solid #2d3a4f;
+    }
+    .modal input { width: 100%; padding: 10px; margin: 10px 0; border-radius: 6px; border: 1px solid #3d4f6f; background: var(--bg); color: var(--text); }
+    .search-hit { padding: 10px; border-bottom: 1px solid #2d3a4f; cursor: pointer; }
+    .search-hit:hover { background: #243044; }
+    footer a { color: var(--accent); }
+    .modal.wide { max-width: min(1040px, 96vw); }
+    .unpaired-summary {
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-bottom: 14px;
+      line-height: 1.5;
+    }
+    .unpaired-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 14px;
+    }
+    .unpaired-card {
+      background: var(--bg);
+      border: 1px solid #2d3a4f;
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .unpaired-img-link {
+      display: block;
+      border-radius: 6px;
+      overflow: hidden;
+      line-height: 0;
+      background: #0a0e14;
+    }
+    .unpaired-img-link:hover { opacity: 0.92; }
+    .unpaired-img-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .unpaired-img-link.unpaired-img-fallback {
+      min-height: 140px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1.4;
+      padding: 12px;
+      text-align: center;
+      text-decoration: none;
+      color: var(--accent);
+      font-size: 0.85rem;
+    }
+    .unpaired-card img {
+      width: 100%;
+      height: 140px;
+      object-fit: contain;
+      background: #0a0e14;
+      border-radius: 6px;
+      display: block;
+    }
+    .unpaired-card .title {
+      font-size: 0.92rem;
+      font-weight: 500;
+      line-height: 1.35;
+    }
+    .unpaired-card .handle {
+      font-size: 0.78rem;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .st-active { background: #1f3d2a; color: var(--ok); }
+    .st-draft { background: #3d3420; color: var(--warn); }
+    .st-other { background: #2a3140; color: var(--muted); }
+    .modal-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 12px;
+    }
+    .modal-head h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      line-height: 1.35;
+      flex: 1;
+      min-width: 0;
+    }
+    button.modal-close {
+      flex-shrink: 0;
+      margin: 0;
+      padding: 6px 12px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Supplier ↔ Gastronom matching</h1>
+    <span class="meta" id="hdr-meta"></span>
+    <button type="button" onclick="downloadCsv()">Download CSV report</button>
+    <button type="button" onclick="showUnpairedGastronom()">Gastronom: not on supplier</button>
+    <button type="button" onclick="showUnpairedSupplier()">1-caviar: not in Gastronom</button>
+    <button type="button" onclick="showFinalReport()">Final summary JSON</button>
+  </header>
+  <main>
+    <div class="nav-row">
+      <button type="button" onclick="prev()">← Previous</button>
+      <button type="button" onclick="next()">Next →</button>
+      <span id="idx-label" class="meta"></span>
+    </div>
+    <div id="status-bar"></div>
+    <div class="grid">
+      <div class="panel">
+        <h2>Supplier (1-caviar)</h2>
+        <div id="supplier-block"></div>
+      </div>
+      <div class="panel">
+        <h2>Gastronom suggestions</h2>
+        <div id="matches-block"></div>
+        <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
+          <button type="button" class="success" onclick="confirmSelected()">✅ Confirm match</button>
+          <button type="button" class="danger" onclick="markNoMatch()">❌ No match</button>
+          <button type="button" onclick="openSearch()">🔍 Search manually</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal-bg" id="search-modal">
+    <div class="modal">
+      <h2 style="margin-top:0;font-size:1rem;">Search Gastronom catalog</h2>
+      <input type="search" id="search-input" placeholder="Name or handle…" />
+      <div id="search-results"></div>
+      <button type="button" onclick="closeSearch()" style="margin-top:12px;">Close</button>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="unpaired-modal">
+    <div class="modal wide">
+      <div class="modal-head">
+        <h2>Gastronom products not paired with supplier</h2>
+        <button type="button" class="modal-close" onclick="closeUnpaired()">Close</button>
+      </div>
+      <p class="unpaired-summary" id="unpaired-summary"></p>
+      <div class="unpaired-grid" id="unpaired-grid"></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="supplier-unpaired-modal">
+    <div class="modal wide">
+      <div class="modal-head">
+        <h2>1-caviar.ae products not linked to Gastronom export</h2>
+        <button type="button" class="modal-close" onclick="closeSupplierUnpaired()">Close</button>
+      </div>
+      <p class="unpaired-summary" id="supplier-unpaired-summary"></p>
+      <div class="unpaired-grid" id="supplier-unpaired-grid"></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="final-modal">
+    <div class="modal">
+      <h2 style="margin-top:0;font-size:1rem;">Final report</h2>
+      <pre id="final-json" style="font-size:11px; overflow:auto; max-height:60vh;"></pre>
+      <button type="button" onclick="document.getElementById('final-modal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+
+  <script>
+    const REVIEW_PORT = '3001';
+    /** When the page is opened from Live Server or another port, API still targets the review server. */
+    function apiOrigin() {
+      if (location.port === REVIEW_PORT) return '';
+      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+        return `${location.protocol}//${location.hostname}:${REVIEW_PORT}`;
+      }
+      return '';
+    }
+    const API = apiOrigin();
+
+    let rows = [];
+    let idx = 0;
+    let selectedShopifyId = null;
+    let selectedRowSuggestionIndex = null;
+    /** Picked from manual search; confirm on main screen */
+    let manualPick = null;
+    let lastSearchHits = [];
+
+    function badgeClass(st) {
+      if (st.includes('confirmed')) return 'st-confirmed';
+      if (st.includes('no match')) return 'st-none';
+      if (st.includes('auto by handle')) return 'st-handle';
+      return 'st-review';
+    }
+
+    function priceDiffLabel(supPrice, shopPrice) {
+      if (supPrice == null || shopPrice == null) return '';
+      const d = shopPrice - supPrice;
+      const pct = supPrice !== 0 ? ((d / supPrice) * 100).toFixed(1) : '—';
+      const cls = Math.abs(Number(pct)) > 15 ? 'warn' : 'ok';
+      return `<div class="price-diff ${cls}">Δ price: ${d > 0 ? '+' : ''}${d.toFixed(2)} (${pct}% vs supplier)</div>`;
+    }
+
+    function render() {
+      const r = rows[idx];
+      if (!r) return;
+      const s = r.supplier;
+      document.getElementById('idx-label').textContent = `Product ${idx + 1} / ${rows.length}`;
+      document.getElementById('hdr-meta').textContent = `${rows.length} supplier rows (caviar/seafood filter)`;
+
+      document.getElementById('status-bar').innerHTML =
+        `<span class="status-badge ${badgeClass(r.status)}">${escapeHtml(r.status)}</span>`;
+
+      document.getElementById('supplier-block').innerHTML = `
+        ${s.image ? `<img class="supplier-img" src="${escapeAttr(s.image)}" alt="" />` : '<p class="meta">No image</p>'}
+        <div class="line"><strong>Name</strong> ${escapeHtml(s.name_en)}</div>
+        <div class="line"><strong>Handle</strong> ${escapeHtml(s.handle)}</div>
+        <div class="line"><strong>Price</strong> ${s.price != null ? escapeHtml(String(s.price)) : '—'}</div>
+        <div class="line"><strong>Weight</strong> ${s.weight != null ? escapeHtml(String(s.weight)) + ' g' : '—'}</div>
+        <div class="line" style="font-size:0.85rem;color:var(--muted);margin-top:8px;">${escapeHtml((s.description_en || '').slice(0, 400))}${(s.description_en || '').length > 400 ? '…' : ''}</div>
+      `;
+
+      const mb = document.getElementById('matches-block');
+      const parts = [];
+
+      if (manualPick) {
+        const m = manualPick;
+        const diff = priceDiffLabel(s.price, m.price);
+        const scoreLabel =
+          m.score != null && m.score !== '' && m.score !== '—'
+            ? `${escapeHtml(String(m.score))}%`
+            : '—';
+        parts.push(`
+          <div class="match-card selected" data-i="manual" data-gid="${escapeAttr(m.shopify_product_id || '')}" onclick="selectMatch(this)">
+            <div class="line" style="color:var(--accent);font-size:0.8rem;margin-bottom:8px;">Manual search — click Confirm when ready</div>
+            ${m.image ? `<img class="match-img" src="${escapeAttr(m.image)}" alt="" />` : ''}
+            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)}</div>
+            <div class="line"><strong>Handle</strong> ${escapeHtml(m.handle)}</div>
+            <div class="line"><strong>Price</strong> ${m.price != null ? escapeHtml(String(m.price)) : '—'}</div>
+            <div class="line"><strong>Weight</strong> ${m.weight != null ? escapeHtml(String(m.weight)) + ' g' : '—'}</div>
+            <div class="score">Score: ${scoreLabel} ${m.reason ? '· ' + escapeHtml(m.reason) : ''}</div>
+            ${diff}
+          </div>
+        `);
+        selectedShopifyId = m.shopify_product_id || null;
+        selectedRowSuggestionIndex = 'manual';
+      } else {
+        selectedShopifyId = null;
+        selectedRowSuggestionIndex = null;
+      }
+
+      parts.push(
+        ...r.suggestions.map((m, i) => {
+          if (!m) return `<div class="match-card muted">—</div>`;
+          const diff = priceDiffLabel(s.price, m.price);
+          return `
+          <div class="match-card" data-i="${i}" data-gid="${escapeAttr(m.shopify_product_id || '')}" onclick="selectMatch(this)">
+            ${m.image ? `<img class="match-img" src="${escapeAttr(m.image)}" alt="" />` : ''}
+            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)}</div>
+            <div class="line"><strong>Handle</strong> ${escapeHtml(m.handle)}</div>
+            <div class="line"><strong>Price</strong> ${m.price != null ? escapeHtml(String(m.price)) : '—'}</div>
+            <div class="line"><strong>Weight</strong> ${m.weight != null ? escapeHtml(String(m.weight)) + ' g' : '—'}</div>
+            <div class="score">Score: ${m.score != null ? escapeHtml(String(m.score)) : '—'}% ${m.reason ? '· ' + escapeHtml(m.reason) : ''}</div>
+            ${diff}
+          </div>
+        `;
+        })
+      );
+      mb.innerHTML = parts.join('');
+    }
+
+    function escapeHtml(t) {
+      const d = document.createElement('div');
+      d.textContent = t == null ? '' : String(t);
+      return d.innerHTML;
+    }
+    function escapeAttr(t) {
+      return String(t == null ? '' : t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    }
+    /** gid://shopify/Product/8862819123369 → 8862819123369 */
+    function shopifyNumericProductId(gid) {
+      const m = String(gid || '').match(/Product\/(\d+)/);
+      return m ? m[1] : String(gid || '');
+    }
+
+    function selectMatch(el) {
+      if (el.dataset.i !== 'manual') {
+        manualPick = null;
+      }
+      document.querySelectorAll('.match-card').forEach(c => c.classList.remove('selected'));
+      el.classList.add('selected');
+      selectedRowSuggestionIndex = el.dataset.i === 'manual' ? 'manual' : Number(el.dataset.i);
+      selectedShopifyId = el.dataset.gid || null;
+    }
+
+    /**
+     * @param {{ advance?: boolean, reset?: boolean }} opts
+     * advance: after confirm/no-match → next product. reset: force index 0 (not used by default).
+     */
+    async function load(opts = {}) {
+      const prevIdx = idx;
+      const advance = opts.advance === true;
+      const reset = opts.reset === true;
+      const bar = document.getElementById('status-bar');
+      try {
+        const res = await fetch(API + '/api/report');
+        const raw = await res.text();
+        if (!res.ok) {
+          bar.innerHTML = `<span class="status-badge st-none">Report failed (${res.status}). Is the review server running? Open <code>http://localhost:${REVIEW_PORT}</code> from the same machine. ${escapeHtml(raw.slice(0, 280))}</span>`;
+          rows = [];
+          return;
+        }
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch (parseErr) {
+          bar.innerHTML = `<span class="status-badge st-none">Bad JSON from /api/report. ${escapeHtml(String(parseErr.message))}</span>`;
+          rows = [];
+          return;
+        }
+        rows = data.rows || [];
+        const max = Math.max(0, rows.length - 1);
+        if (reset) {
+          idx = 0;
+        } else if (advance) {
+          idx = Math.min(prevIdx + 1, max);
+        } else {
+          idx = Math.min(prevIdx, max);
+        }
+        render();
+      } catch (e) {
+        bar.innerHTML = `<span class="status-badge st-none">Cannot reach API at ${escapeHtml(API || '(same origin)')}/api/report — ${escapeHtml(String(e.message))}. Run <code>npm run review</code> in the project folder.</span>`;
+        rows = [];
+      }
+    }
+
+    function prev() {
+      if (idx > 0) {
+        manualPick = null;
+        idx--;
+        render();
+      }
+    }
+    function next() {
+      if (idx < rows.length - 1) {
+        manualPick = null;
+        idx++;
+        render();
+      }
+    }
+
+    async function confirmSelected() {
+      const r = rows[idx];
+      if (!r || !selectedShopifyId) {
+        alert('Select a Gastronom card first (click a suggestion).');
+        return;
+      }
+      const res = await fetch(API + '/api/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_handle: r.supplier.handle, shopify_product_id: selectedShopifyId })
+      });
+      if (!res.ok) { alert(await res.text()); return; }
+      manualPick = null;
+      await load({ advance: true });
+    }
+
+    async function markNoMatch() {
+      const r = rows[idx];
+      if (!r) return;
+      await fetch(API + '/api/no-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_handle: r.supplier.handle })
+      });
+      manualPick = null;
+      await load({ advance: true });
+    }
+
+    function downloadCsv() {
+      window.open(API + '/api/report.csv', '_blank');
+    }
+
+    function statusBadgeClass(st) {
+      const u = String(st || '').trim().toUpperCase();
+      if (u === 'ACTIVE') return 'st-active';
+      if (u === 'DRAFT') return 'st-draft';
+      return 'st-other';
+    }
+
+    function unpairedStatusOrder(st) {
+      const u = String(st || '').trim().toUpperCase();
+      if (u === 'ACTIVE') return 0;
+      if (u === 'DRAFT') return 1;
+      return 2;
+    }
+
+    async function showUnpairedGastronom() {
+      const box = document.getElementById('unpaired-grid');
+      const sum = document.getElementById('unpaired-summary');
+      box.innerHTML = '<p class="meta">Loading…</p>';
+      sum.textContent = '';
+      document.getElementById('unpaired-modal').classList.add('open');
+      try {
+        const res = await fetch(API + '/api/unpaired-gastronom');
+        if (res.status === 404) {
+          throw new Error(
+            'Route missing (/api/unpaired-gastronom) — restart npm run review from the project folder. Open http://localhost:' +
+              REVIEW_PORT +
+              ' .'
+          );
+        }
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        sum.innerHTML =
+          `Supplier products in file: <strong>${data.supplier_product_count}</strong> · ` +
+          `Unpaired Gastronom rows: <strong>${data.count}</strong> ` +
+          `(ACTIVE <strong>${data.active}</strong>, DRAFT <strong>${data.draft}</strong>). ` +
+          `Not linked = no matching supplier handle and no mapping from a supplier handle you still have.`;
+        const list = [...(data.products || [])].sort((a, b) => {
+          const d = unpairedStatusOrder(a.status) - unpairedStatusOrder(b.status);
+          if (d !== 0) return d;
+          return String(a.name || '').localeCompare(String(b.name || ''), 'ru');
+        });
+        box.innerHTML = list
+          .map(
+            (p) => `
+          <div class="unpaired-card">
+            ${p.image ? `<img src="${escapeAttr(p.image)}" alt="" loading="lazy" />` : '<div class="meta" style="padding:24px;text-align:center;">No image</div>'}
+            <span class="status-badge ${statusBadgeClass(p.status)}">${escapeHtml(p.status)}</span>
+            <div class="title">${escapeHtml(p.name)}</div>
+            <div class="handle">${escapeHtml(p.handle)}</div>
+            <div class="handle" style="font-size:0.72rem;">${escapeHtml(shopifyNumericProductId(p.shopify_product_id))}</div>
+          </div>
+        `
+          )
+          .join('');
+      } catch (e) {
+        box.innerHTML = `<p class="meta" style="color:var(--bad);">${escapeHtml(String(e.message))}</p>`;
+      }
+    }
+
+
+    async function showUnpairedSupplier() {
+      const box = document.getElementById('supplier-unpaired-grid');
+      const sum = document.getElementById('supplier-unpaired-summary');
+      box.innerHTML = '<p class="meta">Loading…</p>';
+      sum.textContent = '';
+      document.getElementById('supplier-unpaired-modal').classList.add('open');
+      try {
+        const res = await fetch(API + '/api/unpaired-supplier');
+        if (res.status === 404) {
+          throw new Error(
+            'Route missing — restart npm run review from the project folder (needs /api/unpaired-supplier).'
+          );
+        }
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        sum.innerHTML =
+          'Supplier products in file: <strong>' +
+          data.supplier_product_count +
+          '</strong> · ' +
+          'Not in Gastronom export (no shared handle, no mapping to a GID in from_gastronom.json): <strong>' +
+          data.count +
+          '</strong>. ' +
+          'Click an image to open the product on 1-caviar.ae in a new tab.';
+        const list = data.products || [];
+        box.innerHTML = list
+          .map((p) => {
+            const href = escapeAttr(p.url || '');
+            const imgHtml = p.image
+              ? '<a class="unpaired-img-link" href="' +
+                href +
+                '" target="_blank" rel="noopener noreferrer"><img src="' +
+                escapeAttr(p.image) +
+                '" alt="" loading="lazy" /></a>'
+              : '<a class="unpaired-img-link unpaired-img-fallback" href="' +
+                href +
+                '" target="_blank" rel="noopener noreferrer">Open product on 1-caviar.ae →</a>';
+            return (
+              '<div class="unpaired-card">' +
+              imgHtml +
+              '<div class="title">' +
+              escapeHtml(p.name) +
+              '</div>' +
+              '<div class="handle">' +
+              escapeHtml(p.handle) +
+              '</div>' +
+              (p.price != null
+                ? '<div class="handle">Price: ' + escapeHtml(String(p.price)) + '</div>'
+                : '') +
+              '</div>'
+            );
+          })
+          .join('');
+      } catch (e) {
+        box.innerHTML =
+          '<p class="meta" style="color:var(--bad);">' + escapeHtml(String(e.message)) + '</p>';
+      }
+    }
+
+    function closeSupplierUnpaired() {
+      document.getElementById('supplier-unpaired-modal').classList.remove('open');
+    }
+
+    function closeUnpaired() {
+      document.getElementById('unpaired-modal').classList.remove('open');
+    }
+
+    async function showFinalReport() {
+      const res = await fetch(API + '/api/final-report');
+      const j = await res.json();
+      document.getElementById('final-json').textContent = JSON.stringify(j, null, 2);
+      document.getElementById('final-modal').classList.add('open');
+    }
+
+    function openSearch() {
+      document.getElementById('search-modal').classList.add('open');
+      document.getElementById('search-input').focus();
+    }
+    function closeSearch() {
+      document.getElementById('search-modal').classList.remove('open');
+    }
+
+    document.getElementById('search-input').addEventListener('input', async (e) => {
+      const q = e.target.value.trim();
+      const box = document.getElementById('search-results');
+      if (q.length < 2) { box.innerHTML = ''; lastSearchHits = []; return; }
+      const res = await fetch(API + '/api/search?q=' + encodeURIComponent(q));
+      const hits = await res.json();
+      lastSearchHits = hits;
+      box.innerHTML = hits.map((h, i) => `
+        <div class="search-hit" data-idx="${i}" onclick="pickSearchHit(Number(this.dataset.idx))">
+          <strong>${escapeHtml(h.name_ru)}</strong><br/>
+          <span class="meta">${escapeHtml(h.handle)} · ${escapeHtml(h.shopify_product_id || '')}</span>
+        </div>
+      `).join('');
+    });
+
+    function pickSearchHit(i) {
+      const hit = lastSearchHits[i];
+      if (!hit || !hit.shopify_product_id) return;
+      manualPick = {
+        ...hit,
+        score: '—',
+        reason: 'manual_search'
+      };
+      closeSearch();
+      document.getElementById('search-input').value = '';
+      document.getElementById('search-results').innerHTML = '';
+      lastSearchHits = [];
+      render();
+    }
+
+    load().catch((e) => {
+      document.getElementById('status-bar').innerHTML =
+        `<span class="status-badge st-none">${escapeHtml(String(e && e.message ? e.message : e))}</span>`;
+    });
+  </script>
+</body>
+</html>

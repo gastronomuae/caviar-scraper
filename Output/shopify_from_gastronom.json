@@ -1,0 +1,51 @@
+[
+  {
+    "id": "gid://shopify/Product/8849246355625",
+    "title": "Вобла вяленая (ломтики)",
+    "handle": "dried-vobla-roe",
+    "vendor": "Caviar N1",
+    "image": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/dried_vobla_roe.webp?v=1768760981"
+  },
+  {
+    "id": "gid://shopify/Product/8862913953961",
+    "title": "Конечности Камчатского Краба",
+    "handle": "crab-legs-kamchatka",
+    "vendor": "Caviar N1",
+    "image": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/crab_camchatka_legs.webp?v=1770230524"
+  },
+  {
+    "id": "gid://shopify/Product/8853557641385",
+    "title": "Корюшка камчатская вяленая отборная",
+    "handle": "dried-smelt-koryushka-kamchatskaya-vyalennaya",
+    "vendor": "Caviar N1",
+    "image": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/dried_smelt.png?v=1769280875"
+  },
+  {
+    "id": "gid://shopify/Product/8862819123369",
+    "title": "Креветки Магаданские",
+    "handle": "shrimps-magadan",
+    "vendor": "Caviar N1",
+    "image": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/shrimp_magadan_frozen.webp?v=1770230036"
+  },
+  {
+    "id": "gid://shopify/Product/8862864605353",
+    "title": "Креветки Чилим Замороженный",
+    "handle": "shrimp-chilim-frozen",
+    "vendor": "Caviar N1",
+    "image": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/shrimp_chilim.webp?v=1770230267"
+  },
+  {
+    "id": "gid://shopify/Product/8862728847529",
+    "title": "Очищенные Креветки Магаданские",
+    "handle": "shrimp-magadan-frozen",
+    "vendor": "Caviar N1",
+    "image": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/shrimp_magadan.webp?v=1770229743"
+  },
+  {
+    "id": "gid://shopify/Product/7735353082025",
+    "title": "Черная икра Imperial Gold 125г",
+    "handle": "black-caviar-imperial-gold",
+    "vendor": "Caviar N1",
+    "image": "https://cdn.shopify.com/s/files/1/0582/2686/8393/products/black_caviar_imperial_gold.png?v=1750275056"
+  }
+]

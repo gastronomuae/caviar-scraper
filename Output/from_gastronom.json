@@ -1,0 +1,1095 @@
+[
+  {
+    "name": "Конечности Камчатского Краба",
+    "handle": "crab-legs-kamchatka",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "450.00",
+        "stock": "0",
+        "weight": "1000 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46783258099881"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/crab_camchatka_legs.webp?v=1770230524",
+    "description": "Конечности камчатского краба - премиальный замороженный морепродукт с нежным мясом и лёгкой сладостью. Доставка по Дубаю.",
+    "product_type": "Морепродукты",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8862913953961"
+  },
+  {
+    "name": "Креветки Чилим Замороженный",
+    "handle": "shrimp-chilim-frozen",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "500.00",
+        "stock": "0",
+        "weight": "1000 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46783208128681"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/shrimp_chilim.webp?v=1770230267",
+    "description": "Креветки Чилим — замороженный морепродукт с нежным мясом и насыщенным вкусом. Около 35–40 штук в упаковке. Доставка по Дубаю.",
+    "product_type": "Морепродукты",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8862864605353"
+  },
+  {
+    "name": "Креветки Магаданские",
+    "handle": "shrimps-magadan",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "250.00",
+        "stock": "-3",
+        "weight": "1000 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46783162286249"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/shrimp_magadan_frozen.webp?v=1770230036",
+    "description": "Креветки Магадан из Охотского моря - замороженный морепродукт премиального качества с насыщенным вкусом. Доставка по Дубаю.",
+    "product_type": "Морепродукты",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/8862819123369"
+  },
+  {
+    "name": "Очищенные Креветки Магаданские",
+    "handle": "shrimp-magadan-frozen",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "100.00",
+        "stock": "-1",
+        "weight": "200 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46783068045481"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/shrimp_magadan.webp?v=1770229743",
+    "description": "Очищенные замороженные креветки Магадан из Охотского моря. Премиальное качество, готовы к использованию. Доставка по Дубаю.",
+    "product_type": "Морепродукты",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8862728847529"
+  },
+  {
+    "name": "Корюшка камчатская вяленая отборная",
+    "handle": "dried-smelt-koryushka-kamchatskaya-vyalennaya",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "277.00",
+        "stock": "-2",
+        "weight": "600 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46756389912745"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/dried_smelt.png?v=1769280875",
+    "description": "Вяленая камчатская корюшка - натуральная рыба из России. Отборное качество, вакуумная упаковка. Заказать с доставкой по Дубаю.",
+    "product_type": "Рыба",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/8853557641385"
+  },
+  {
+    "name": "Вобла вяленая (ломтики)",
+    "handle": "dried-vobla-roe",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "250.00",
+        "stock": "-1",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46743044948137"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/dried_vobla_roe.webp?v=1768760981",
+    "description": "Вобла вяленая ломтиками — натуральный рыбный снек с насыщенным вкусом и плотной текстурой. Без добавок. Доставка по Дубаю.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8849246355625"
+  },
+  {
+    "name": "Сиг холодного копчения",
+    "handle": "cold-smoked-sign-balik",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "372.00",
+        "stock": "-1",
+        "weight": "745 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46743041999017"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/balik_omul_cold_smoked_fillet.png?v=1750274975",
+    "description": "Сиг холодного копчения - нежный рыбный деликатес с тонким ароматом дыма. Богат белком и омега-3. Доставка по Дубаю.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8849245798569"
+  },
+  {
+    "name": "Корюшка сахалинская вяленая отборная",
+    "handle": "dried-smelt-sakhalin",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "216.00",
+        "stock": "-4",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46742920265897"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/dried_smelt.png?v=1769280875",
+    "description": "Корюшка сахалинская вяленая отборная из России. Натуральный вкус, вакуумная упаковка, продажа на вес. Быстрая доставка по Дубаю.",
+    "product_type": "Рыба",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/8849230823593"
+  },
+  {
+    "name": "Филе белуги холодного копчения",
+    "handle": "cold-smoked-beluga-fillet",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "500.00",
+        "stock": "0",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46742916366505"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/cold_smoked_beluga_fillet_1.webp?v=1768745141",
+    "description": "Филе белуги холодного копчения — редкий рыбный деликатес с нежной текстурой и сбалансированным ароматом. Омега-3 и белок. Доставка по Дубаю.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8849229938857"
+  },
+  {
+    "name": "Филе осетра холодного копчения",
+    "handle": "cold-smoked-sturgeon-fillet",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "500.00",
+        "stock": "0",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46742916235433"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/cold_smoked_beluga_fillet_1.webp?v=1768745141",
+    "description": "Филе осетра холодного копчения - изысканный рыбный деликатес с нежной текстурой и тонким ароматом. Богато омега-3. Доставка по Дубаю.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8849229906089"
+  },
+  {
+    "name": "Белуга горячего копчения",
+    "handle": "hot-smoked-beluga",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "500.00",
+        "stock": "0",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46742915481769"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/hot_smoked_beluga.webp?v=1768743932",
+    "description": "Белуга горячего копчения - изысканный рыбный деликатес с насыщенным вкусом и ароматом копчения. Премиальное качество. Доставка по Дубаю.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8849229676713"
+  },
+  {
+    "name": "Филе осетра горячего копчения",
+    "handle": "hot-smoked-sturgeon-fillet",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "500.00",
+        "stock": "0",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46742913220777"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/hot_smoked_sturgeon.webp?v=1768744239",
+    "description": "Элитная сушеная тихоокеанская семга с соевым соусом от Siberian Luxury Bar. Насладитесь богатым вкусом и питательностью этого деликатеса, приготовленного с использованием высококачественного лосося и пропитанного соевым соусом.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8849229578409"
+  },
+  {
+    "name": "Золотистая осетровая икра Osetra Gold 125г.",
+    "handle": "black-caviar-gold-osetra",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "610.00",
+        "stock": "-2",
+        "weight": "125 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46742911549609"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/black_caviar_gold_osetra.webp?v=1768741988",
+    "description": "Золотистая осетровая икра Osetra Gold 125 г - редкая янтарная икра высшего класса. Эксклюзивный формат для особых случаев. Доставка по Дубаю.",
+    "product_type": "Икра",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8849229316265"
+  },
+  {
+    "name": "Золотистая осетровая икра Osetra Gold 50г.",
+    "handle": "black-caviar-gold-osetra-50g",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "275.00",
+        "stock": "0",
+        "weight": "50 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46742911058089"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/black_caviar_gold_osetra.webp?v=1768741988",
+    "description": "Золотистая осетровая икра Osetra Gold 50 г - редкая янтарно-золотая икра с мягким ореховым вкусом. Эксклюзивный формат. Доставка по Дубаю.",
+    "product_type": "Икра",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8849228923049"
+  },
+  {
+    "name": "Гребешок в маринаде с укропом и чесноком 500г.",
+    "handle": "scallop-marinated-dill-garlic-dubai",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "450.00",
+        "stock": "-1",
+        "weight": "500 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46710991093929"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/scallop_dil.webp?v=1767460144",
+    "description": "Купить морской гребешок в маринаде с укропом и чесноком в Дубае. Премиальный морской деликатес, готовый к подаче. Заказ онлайн.",
+    "product_type": "Морепродукты",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8839283310761"
+  },
+  {
+    "name": "Тугунок слабосолёный 500г.",
+    "handle": "tugunok-lightly-salted",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "400.00",
+        "stock": "-1",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46710988964009"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/tugunok.webp?v=1767459728",
+    "description": "Купить тугунок слабосолёный в Дубае с доставкой. Северный рыбный деликатес, натуральный состав, высокое качество. Заказ онлайн.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8839283048617"
+  },
+  {
+    "name": "Икра Щуки 100 г.",
+    "handle": "pike-caviar-delicacy",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "100.00",
+        "stock": "-4",
+        "weight": "100 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46710983655593"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/pike_caviar_small_e3ca7343-22c8-448d-80f6-b5aecc306ff7.webp?v=1767459305",
+    "description": "Икра щуки пастеризованная с нежным вкусом и мелкой зернистостью. Идеально для бутербродов, канапе и праздничных закусок.",
+    "product_type": "Икра",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8839282622633"
+  },
+  {
+    "name": "Икра Кижуча 500г.",
+    "handle": "red-caviar-coho-salmon-big",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "500.00",
+        "stock": "-14",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46453165031593"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/products/red_caviar_glass_jar_e7d3e489-ce5a-4ecf-b4bf-17fd74ab2525.png?v=1750275054",
+    "description": "Красная икра кижуча 500г — насыщенный вкус, средние икринки (~3 мм) и чистое послевкусие. Источник омега-3 и витаминов. Закажите онлайн с доставкой по Дубаю и ОАЭ.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/8765024141481"
+  },
+  {
+    "name": "Икра Кижуча 250г.",
+    "handle": "red-caviar-coho-salmon-medium",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "250.00",
+        "stock": "-15",
+        "weight": "250 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46453164966057"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/products/red_caviar_glass_jar_e7d3e489-ce5a-4ecf-b4bf-17fd74ab2525.png?v=1750275054",
+    "description": "Красная икра кижуча 250г — ярко-красный цвет, среднезернистая структура и лёгкий вкус. Источник омега-3 и белка. Доставка по Дубаю и ОАЭ.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/8765024010409"
+  },
+  {
+    "name": "Икра Кижуча 125г.",
+    "handle": "red-caviar-coho-salmon-small",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "150.00",
+        "stock": "-4",
+        "weight": "125 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46453164671145"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/red_caviar_b02e516b-e772-4562-80d5-38e9a65c39a3.png?v=1750274786",
+    "description": "Красная икра кижуча 125г - насыщенный вкус, среднезернистая структура и яркий цвет. Богата омега-3 и витаминами. Закажите онлайн с доставкой по Дубаю и ОАЭ.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/8765023944873"
+  },
+  {
+    "name": "Икра Нерки 500г.",
+    "handle": "red-caviar-sockeye-salmon-big",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "500.00",
+        "stock": "-14",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46453144649897"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/products/red_caviar_glass_jar_e7d3e489-ce5a-4ecf-b4bf-17fd74ab2525.png?v=1750275054",
+    "description": "Икра нерки 500г — крупнозернистая красная икра с насыщенным вкусом и рубиновым оттенком. Источник омега-3 и белка. Закажите онлайн с доставкой по Дубаю и ОАЭ.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/8765020831913"
+  },
+  {
+    "name": "Тарань Вяленая Астрахань",
+    "handle": "taran-dried-astrakhan",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "125.00",
+        "stock": "-1",
+        "weight": "502 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/46743038820521"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/taran_dried.webp?v=1750274643",
+    "description": "Тарань вяленая — традиционный рыбный деликатес с насыщенным вкусом. Богата белком и омега-3. Натуральная сушка, без добавок.",
+    "product_type": "Рыба",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/8576613122217"
+  },
+  {
+    "name": "Вобла Вяленая Астрахань",
+    "handle": "vobla-astrakhan",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "165.00",
+        "stock": "0",
+        "weight": "550 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/45917763961001"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/vobla.webp?v=1750274643",
+    "description": "Вобла вяленая — натуральная закуска с насыщенным вкусом и высоким содержанием белка и омега-3. ",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8576613089449"
+  },
+  {
+    "name": "Скумбрия холодного копчения",
+    "handle": "cold-smoked-mackerel",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "72.00",
+        "stock": "-22",
+        "weight": "362 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/45917759078569"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/cold_smoked_mackerel.webp?v=1750274644",
+    "description": "Скумбрия холодного копчения с ароматом натуральных опилок груши и сливы. Бережная обработка сохраняет вкус и пользу.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8576612663465"
+  },
+  {
+    "name": "Скумбрия провесная",
+    "handle": "gently-dried-mackerel",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "69.00",
+        "stock": "-1",
+        "weight": "334 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/45917758521513"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/gently_smoked_mackerel.webp?v=1750274644",
+    "description": "Провесная скумбрия — слегка вяленая, слабосоленая рыба с натуральным вкусом. Идеальна для закусок и с картофелем.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/8576612532393"
+  },
+  {
+    "name": "Скумбрия горячего копчения",
+    "handle": "hot-smocked-mackerel",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "54.00",
+        "stock": "1",
+        "weight": "270 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/45917758324905"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/hot_smoked_mackerel.webp?v=1750274645",
+    "description": "Сочная скумбрия горячего копчения с натуральным ароматом древесного дыма. Идеальный выбор для ужина или пикника.",
+    "product_type": "Рыба",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/8576612434089"
+  },
+  {
+    "name": "Холодно копченый королевский лосось с апельсином, медом и имбирем 370г.",
+    "handle": "siberian-luxury-bar-salmon-fillet-honey-orange-ginger",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "260.00",
+        "stock": "-1",
+        "weight": "370 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43917476102313"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/siberian_luxury_bar_salmon_fillet_ginger_honey_lemon.png?v=1750274770",
+    "description": "Копченый лосось с апельсином, медом и имбирем от Siberian Luxury Bar - идеальное сочетание вкусов, приправленное нежным дымом. Наслаждайтесь этими деликатесами, доступными для покупки в Дубае, и добавьте изыск в свои кулинарные эксперименты.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7993238454441"
+  },
+  {
+    "name": "Нежно подвяленная нельма 180г.",
+    "handle": "sibirian-luxury-bar-nelma-wind",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "180.00",
+        "stock": "-11",
+        "weight": "170 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43917465452713"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/siberian_luxury_bar_nelma_wind.png?v=1750274770",
+    "description": "Нежно подвяленная нельма от Siberian Luxury Bar - изысканный деликатес, приготовленный для настоящих гурманов.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7993237012649"
+  },
+  {
+    "name": "Нежно соленые ломтики королевского лосося 300г.",
+    "handle": "siberian-luxury-bar-lightly-salted-king-salmon-slices",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "300.00",
+        "stock": "-1",
+        "weight": "300 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43917453852841"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/siberian_luxury_bar_salmon_fillet_classicl.png?v=1750274771",
+    "description": "Элитная сушеная тихоокеанская семга с соевым соусом от Siberian Luxury Bar. Насладитесь богатым вкусом и питательностью этого деликатеса, приготовленного с использованием высококачественного лосося и пропитанного соевым соусом.",
+    "product_type": "Рыба",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7993235472553"
+  },
+  {
+    "name": "Соус из краба с лаймом, оливковым маслом и тимьяном",
+    "handle": "crab-sause-lime-thyme",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "150.00",
+        "stock": "-1",
+        "weight": "180 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43916086935721"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/crab_sauce_lime.png?v=1750274772",
+    "description": "Наслаждайтесь богатыми вкусами сочного краба, сбалансированными освежающими нотками лайма и нежной травянистостью тимьяна.",
+    "product_type": "Морепродукты",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7992427741353"
+  },
+  {
+    "name": "Муксун слабосол",
+    "handle": "siberian-luxury-bar-muskun-slabosol",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "200.00",
+        "stock": "-7",
+        "weight": "170 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43916005245097"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/muksun_slabosol.png?v=1750274774",
+    "description": "Попробуйте Муксун слабосол от Siberian Luxury Bar - идеальный способ приготовления для арктической рыбы.",
+    "product_type": "Морепродукты",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7992391762089"
+  },
+  {
+    "name": "Нельма слабой соли Тартар",
+    "handle": "siberian-luxury-bar-nelma-slabosol-tartar",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "sku": "2000000000275",
+        "price": "300.00",
+        "stock": "-1",
+        "weight": "170 г.",
+        "barcode": "2000000000275",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43915717443753"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/nelma_tartare.png?v=1750274775",
+    "description": "Наслаждайтесь нежным, рафинированным вкусом слабосоленой нельмы Тартар от Siberian Luxury Bar. ",
+    "product_type": "Морепродукты",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7992244633769"
+  },
+  {
+    "name": "Нельма слабой соли",
+    "handle": "siberian-luxury-bar-nelma-slabosol",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "sku": "2000000000060",
+        "price": "300.00",
+        "stock": "0",
+        "weight": "180 г.",
+        "barcode": "2000000000060",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43915701158057"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/nelma_slabosol.png?v=1750274775",
+    "description": "Наслаждайтесь нежным отборным мясом нельмы слабой соли от Siberian Luxury Bar.",
+    "product_type": "Морепродукты",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7992236015785"
+  },
+  {
+    "name": "Олюторская сельдь слабосоленная целая",
+    "handle": "olyutorsky-herring-whole",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "70.00",
+        "stock": "-1",
+        "weight": "355 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43899103674537"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/olyutorski_herring_WHOLE.png?v=1750274778",
+    "description": "Насладитесь нежным вкусом слабосоленой олюторской сельди, прекрасным деликатесом северных морей, теперь в Дубае.",
+    "product_type": "Рыба",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7986801541289"
+  },
+  {
+    "name": "Олюторская сельдь филе",
+    "handle": "olyutorsky-herring-fillet",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "110.00",
+        "stock": "-6",
+        "weight": "350 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43889980637353"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/olyutorski_herring_12364d36-870a-437b-a6a5-f64669ac7d32.png?v=1750274780",
+    "description": "Олюторская сельдь - это нежные кусочки филе сельди, приготовленные по традиционному рецепту Олюторского завода. Этот деликатес отличается сочным вкусом и ароматом, идеально подходящим для различных закусок и блюд.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7984305799337"
+  },
+  {
+    "name": "Черная икра Imperial Gold 50г",
+    "handle": "black-caviar-imperial-gold-dubai",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "sku": "1711911894033",
+        "price": "260.00",
+        "stock": "-17",
+        "weight": "50 г.",
+        "barcode": "1711911894033",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43887292088489"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/black_caviar_imperial_gold.png?v=1750274783",
+    "description": "Черная икра Imperial Gold 50 г — премиальный продукт с насыщенным вкусом и крупными зернами. Отличный выбор для закусок и праздничного стола.",
+    "product_type": "Икра",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7983963013289"
+  },
+  {
+    "name": "Черная осетровая икра Royal Osetra 50г.",
+    "handle": "black-caviar-royal-osetra-dubai",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "sku": "1682606086546",
+        "price": "290.00",
+        "stock": "18",
+        "weight": "50 г.",
+        "barcode": "1682606086546",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43886466007209"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/black_caviar_royal_osetra.webp?v=1768741344",
+    "description": "Черная осетровая икра Royal Osetra 50 г - идеальный формат для дегустации. Ореховый вкус, зернистая структура. Доставка по Дубаю.",
+    "product_type": "Икра",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7983826075817"
+  },
+  {
+    "name": "Красная Икра Кеты 125г.",
+    "handle": "red-keta-caviar-dubai",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "150.00",
+        "stock": "-25",
+        "weight": "125г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/44946119131305"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/red_caviar_9d78b212-1baf-4717-9bc4-af91a20f1bbf.png?v=1750274785",
+    "description": "Икра Кеты дубай - наслаждение крупными зернами, нежным кремовым вкусом и богатством омега-3 жирных кислот. Погрузитесь в уникальный вкус и пользу этого превосходного деликатеса.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7983659057321"
+  },
+  {
+    "name": "Икра Нерки 125г.",
+    "handle": "red-caviar-sockeye-salmon-small",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "150.00",
+        "stock": "-3",
+        "weight": "125 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/44652869091497"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/red_caviar_b02e516b-e772-4562-80d5-38e9a65c39a3.png?v=1750274786",
+    "description": "Икра нерки 125г - ярко-красная, с насыщенным вкусом и \"хрустом\". Богата омега-3 и белками. Закажите онлайн с доставкой по Дубаю и ОАЭ.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7983657025705"
+  },
+  {
+    "name": "Красная Икра Кеты 500г.",
+    "handle": "red-caviar-keta-dubai",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "500.00",
+        "stock": "-10",
+        "weight": "500 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43530612474025"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/red_caviar_glass_jar_18d59d37-35a0-434f-854d-6191cf710333.png?v=1750274907",
+    "description": "оскошная кета икра в крупных банках по 500 г – это настоящее гастрономическое удовольствие для ценителей морепродуктов.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7880572010665"
+  },
+  {
+    "name": "Печень трески натуральная 100г.",
+    "handle": "cod-liver-murmansk",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "100.00",
+        "stock": "-3",
+        "weight": "100 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43496363393193"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/cod_liver_murmansk_small_56e8382a-530e-4617-b0c2-6ffbf3008b32.png?v=1769282359",
+    "description": "Натуральная печень трески от Мурманского рыбного комбината - это высококачественный продукт, произведенный из охлажденного сырья. ",
+    "product_type": "Морепродукты",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7873153859753"
+  },
+  {
+    "name": "Мясо краба камчатская 720г.",
+    "handle": "crab-meat-720g",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "880.00",
+        "stock": "0",
+        "weight": "720 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242589159593"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/king_crab_meat_dcec5c45-7186-4eb5-aecd-7492bea037f2.jpg?v=1750274972",
+    "description": "Для настоящих гурманов и ценителей изысканных блюд мы предлагаем мясо краба камчатского весом 720 грамм.",
+    "product_type": "Краб",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788255772841"
+  },
+  {
+    "name": "Мясо краба камчатская 520г.",
+    "handle": "crab-meat-520g",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "780.00",
+        "stock": "-8",
+        "weight": "520 г.",
+        "barcode": "",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242585456809"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/king_crab_meat_531c51aa-5d66-431f-89b4-beb62ef5088a.jpg?v=1750274973",
+    "description": "Для ценителей непередаваемого вкуса и полезных свойств нашего мяса краба предлагаем упаковку весом 520 грамм.",
+    "product_type": "Краб",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788255576233"
+  },
+  {
+    "name": "Сельдь Иваси",
+    "handle": "fish-ivasi",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "150.00",
+        "stock": "-4",
+        "weight": "500 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242576019625"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/ivasi.jpg?v=1750274974",
+    "description": "Сельдь Иваси - это рыба, которая, несмотря на свое сходство с сельдью, относится к сардинам. ",
+    "product_type": "Рыба",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7788253741225"
+  },
+  {
+    "name": "Омуль Балык холодного копчения",
+    "handle": "balik-omul-cold-smoked-fillet",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "490.00",
+        "stock": "-5",
+        "weight": "818 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242573955241"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/balik_omul_cold_smoked_fillet.png?v=1750274975",
+    "description": "Омуль Балык холодного копчения - это изысканное лакомство, богатое полезными свойствами.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788253577385"
+  },
+  {
+    "name": "Нельма вяленая на ветру",
+    "handle": "nelma-in-the-wind",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "350.00",
+        "stock": "-3",
+        "weight": "350 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242571530409"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/nelma_in_the_wind.jpg?v=1750274976",
+    "description": "В случае с Нельмой вяленой на ветру, великолепный вкус этой рыбы раскрывается в полной мере. ",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788253053097"
+  },
+  {
+    "name": "Нельма Балык холодного копчения",
+    "handle": "nelma-balik-cold-smoked",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "350.00",
+        "stock": "-18",
+        "weight": "350 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242570055849"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/nelma_balik_cold_smoked.png?v=1750274977",
+    "description": "Слово \"Нельма\" переводится с языка коренных народов дальнего севера. В нашей версии Нельма - это восхитительно роскошный вкус.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788252430505"
+  },
+  {
+    "name": "Стейк из лосося горячего копчения",
+    "handle": "hot-smoked-salmon-steak",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "180.00",
+        "stock": "-1",
+        "weight": "228 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242569597097"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/hot_smoked_salmon_steak.jpg?v=1750274979",
+    "description": "Добавьте немного роскоши в свой обед или ужин с нашими потрясающими стейками из горячего копченого лосося.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788252168361"
+  },
+  {
+    "name": "Королевский лосось нежно подвяленный",
+    "handle": "king-salmon-gently-dried",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "280.00",
+        "stock": "-3",
+        "weight": "350 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242565435561"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/king_salmon_gently_dried.jpg?v=1750274980",
+    "description": "Наш Королевский лосось нежно подвяленный - это результат тщательного исследования и понимания момента, когда мясо сохраняет свою сочность и не утрачивает излишнюю влажность, что позволяет выделить естественные вкусы и ароматы лосося. ",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788251611305"
+  },
+  {
+    "name": "Юкола из королевского лосося",
+    "handle": "royal-salmon-yukola",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "320.00",
+        "stock": "-25",
+        "weight": "350 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242563666089"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/royal_salmon_yukola.png?v=1750274981",
+    "description": "Юкола из королевского лосося — это удивительная по своей простоте и поразительная своим насыщенным вкусом закуска.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788251283625"
+  },
+  {
+    "name": "Королевский лосось холодного копчения c апельсином, медом и имбирем",
+    "handle": "king-salmon-orange-honey",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "280.00",
+        "stock": "-4",
+        "weight": "350 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242563207337"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/king_salmon_orange_honey.jpg?v=1750274982",
+    "description": "Удачный эксперимент в мире вкусов, основанный на филе королевского лосося, дымленного нежным дымом и дополненного фруктовыми нотами красного апельсина, натуральным лаймовым медом и имбирем! ",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788251021481"
+  },
+  {
+    "name": "Королевский лосось холодного копчения",
+    "handle": "cold-smoked-king-salmon",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "280.00",
+        "stock": "-2",
+        "weight": "350 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242562912425"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/cold_smoked_king_salmon.png?v=1750274983",
+    "description": "Внимательно приготовленные филе королевского лосося, отобранные из верхней (задней) части лосося и подвергнутые копчению в соответствии с традиционным рецептом времен Императорской России! ",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788250759337"
+  },
+  {
+    "name": "Королевский лосось слабосоленый",
+    "handle": "sea-salmon-weak-salt",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "280.00",
+        "stock": "-15",
+        "weight": "350 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43242556653737"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/sea_salmon_weak_salt.jpg?v=1750274983",
+    "description": "Представляем вам Королевский лосось слабосоленый — продукт, который не только изысканно вкусен, но и богат питательными веществами.",
+    "product_type": "Рыба",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7788249383081"
+  },
+  {
+    "name": "Икра Форели",
+    "handle": "red-caviar-trout",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "price": "0.00",
+        "stock": "0",
+        "weight": "250 г.",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43040689946793"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/red_caviar_glass_jar.png?v=1750275052",
+    "description": "Красная икра форели - один из самых полезных продуктов для здоровья.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7738857291945"
+  },
+  {
+    "name": "Икра Щуки Астраханская",
+    "handle": "pike-caviar",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "sku": "4607038062534",
+        "price": "110.00",
+        "stock": "-4",
+        "weight": "100 г.",
+        "barcode": "4607038062534",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43029660991657"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/pike_caviar_BLUE.png?v=1750275053",
+    "description": "Икра щуки - это деликатес из свежевыловленной щуки, из Астраханского региона. Эта икра имеет золотистый оттенок и мягкий, но хрустящий вкус.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7735357309097"
+  },
+  {
+    "name": "Икра Нерки 250г.",
+    "handle": "red-caviar-sockeye-salmon-medium",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "sku": "1687336026933",
+        "price": "250.00",
+        "stock": "-16",
+        "weight": "250 г.",
+        "barcode": "1687336026933",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43029622980777"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/products/red_caviar_glass_jar_e7d3e489-ce5a-4ecf-b4bf-17fd74ab2525.png?v=1750275054",
+    "description": "Икра нерки 250г — премиальная красная икра с насыщенным вкусом и мягкой текстурой. Богата омега-3 и витаминами. Доставка по Дубаю и ОАЭ.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7735356391593"
+  },
+  {
+    "name": "Красная Икра Кеты 250г.",
+    "handle": "red-caviar-keta-dubai-1",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "sku": "1687335822355",
+        "price": "250.00",
+        "stock": "-46",
+        "weight": "250 г.",
+        "barcode": "1687335822355",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43029608104105"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/products/red_caviar_glass_jar.png?v=1750275055",
+    "description": "Черная икра осетра - это один из самых дорогих и востребованных деликатесов в мире, символ изысканного вкуса и поистине эксклюзивный продукт.",
+    "product_type": "Икра",
+    "Product Status": "DRAFT",
+    "shopify_product_id": "gid://shopify/Product/7735355965609"
+  },
+  {
+    "name": "Черная осетровая икра Royal Osetra 125г.",
+    "handle": "black-caviar-royal-osetra",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "sku": "1687335272680",
+        "price": "675.00",
+        "stock": "-6",
+        "weight": "125 г.",
+        "barcode": "1687335272680",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43029574779049"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/files/black_caviar_royal_osetra_1b559d14-fe3a-48e2-b917-7327b314264b.webp?v=1768741352",
+    "description": "Черная осетровая икра Royal Osetra 125 г — премиальный объём для праздничного стола. Насыщенный вкус. Доставка по Дубаю.",
+    "product_type": "Икра",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7735355146409"
+  },
+  {
+    "name": "Черная икра Imperial Gold 125г",
+    "handle": "black-caviar-imperial-gold",
+    "vendor": "Caviar N1",
+    "variants": [
+      {
+        "sku": "1711911793463",
+        "price": "650.00",
+        "stock": "-14",
+        "weight": "125 г.",
+        "barcode": "1711911793463",
+        "shopify_variant_id": "gid://shopify/ProductVariant/43029516877993"
+      }
+    ],
+    "Image url": "https://cdn.shopify.com/s/files/1/0582/2686/8393/products/black_caviar_imperial_gold.png?v=1750275056",
+    "description": "Черная икра Imperial Gold - роскошный деликатес, который поражает своим великолепным вкусом и ароматом. Насладитесь уникальным вкусом и роскошью этой эксклюзивной икры.\n",
+    "product_type": "Икра",
+    "Product Status": "ACTIVE",
+    "shopify_product_id": "gid://shopify/Product/7735353082025"
+  }
+]

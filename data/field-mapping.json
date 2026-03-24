@@ -1,0 +1,31 @@
+{
+  "description": "Field mapping between products_all (1-caviar.ae) and Shopify (gastronom.ae)",
+  "baseUrls": {
+    "source": "https://1-caviar.ae",
+    "target": "https://www.gastronom.ae"
+  },
+  "urlRules": {
+    "extractHandleFromUrl": "Parse /products/{handle} or /collections/*/products/{handle} → handle",
+    "buildProductUrl": "{baseUrl}/products/{handle}",
+    "example": {
+      "source": "https://1-caviar.ae/collections/seafood/products/balik-omul-cold-smoked-fillet",
+      "handle": "balik-omul-cold-smoked-fillet",
+      "target": "https://www.gastronom.ae/products/balik-omul-cold-smoked-fillet"
+    }
+  },
+  "productFields": {
+    "name": "title",
+    "title": "name",
+    "url": "derived from handle: {baseUrl}/products/{handle}"
+  },
+  "variantFields": {
+    "regular_price": "compare_at_price",
+    "promotional_price": "price",
+    "compare_at_price": "regular_price",
+    "price": "promotional_price"
+  },
+  "notes": {
+    "promotional_price": "In Shopify, variant.price = sale price (what customer pays), variant.compare_at_price = original/strikethrough price",
+    "handle": "Handle is the slug in the URL, e.g. /products/balik-omul-cold-smoked-fillet → handle = balik-omul-cold-smoked-fillet"
+  }
+}

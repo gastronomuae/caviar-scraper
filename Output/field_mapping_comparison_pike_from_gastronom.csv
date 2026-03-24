@@ -1,0 +1,25 @@
+Field,Source (latest caviar/products.json),Gastronom (from_gastronom normalized),Status,Mapping Logic,Your Comment
+name,Pike Caviar,Икра Щуки 100 г.,⚠️ translated,,Correct mapping
+url,https://1-caviar.ae/products/pike-caviar,https://www.gastronom.ae/products/pike-caviar-delicacy,⚠️ mismatch,"Build target URL as https://www.gastronom.ae/products/{handle}","Correct, no need to write derived in column C"
+handle,pike-caviar,pike-caviar-delicacy,✅ OK,Handle mapped from Gastronom record,Correct mapping
+description,(not present in latest scraper output),Икра щуки пастеризованная с нежным вкусом...,⚠️ source missing,Use from_gastronom.description (product-level),Correct mapping (use product description, not variant.description)
+image,https://cdn.shopify.com/s/files/1/0791/8010/3977/files/CaviarPike.jpg?v=1713538135,https://cdn.shopify.com/s/files/1/0582/2686/8393/files/pike_caviar_small_e3ca7343-22c8-448d-80f6-b5aecc306ff7.webp?v=1767459305,✅ OK,Map source image URL -> from_gastronom Image url,
+price,100.00,100.00,✅ OK,Direct map: source price -> normalized.price,
+compare_at_price,(not present in latest scraper output),,⚠️ missing,Old/list price not available in either dataset,
+variant_id,(not present in latest scraper output),46710983655593,⚠️ source missing,Only available in from_gastronom,
+variant_weight,(not present in latest scraper output),100,⚠️ source missing,Weight exists only in from_gastronom for this source snapshot,
+variant_stock,(not present in latest scraper output),-4,⚠️ source missing,Stock exists only in from_gastronom,
+MAPPED GASTRONOM FIELD,---,---,---,---,---
+from_gastronom.name,name,Икра Щуки 100 г.,✅ mapped,Gastronom product name/title equivalent,
+from_gastronom.handle,id/url-handle,pike-caviar-delicacy,✅ mapped,slug used for product URL,
+from_gastronom.vendor,(optional static/default),Caviar N1,⚠️ source missing,Source does not include vendor,
+from_gastronom.description,description,Икра щуки пастеризованная...,✅ mapped,Direct description mapping from product-level field,
+from_gastronom.Image url,image,https://cdn.shopify.com/s/files/1/0582/2686/8393/files/pike_caviar_small_e3ca7343-22c8-448d-80f6-b5aecc306ff7.webp?v=1767459305,✅ mapped,Image now present in latest Gastronom export,
+from_gastronom.product_type,(optional category),Икра,⚠️ optional,No direct field in latest scraper output,
+from_gastronom.Product Status,(optional status),ACTIVE,⚠️ optional,No direct field in latest scraper output,
+from_gastronom.shopify_product_id,(no equivalent),gid://shopify/Product/8839282622633,⚠️ optional,Store-specific identifier,
+from_gastronom.normalized.price,price,100.00,✅ mapped,Numeric price for delta checks,
+from_gastronom.normalized.compare_at_price,compare_at_price,,⚠️ missing,Numeric compare_at_price for delta checks,
+from_gastronom.normalized.variant_id,variant_id,46710983655593,⚠️ optional,Numeric variant id extracted from GID,
+from_gastronom.normalized.variant_weight,variant_weight,100,⚠️ transformed,Weight normalized to grams,
+from_gastronom.normalized.variant_stock,variant_stock,-4,⚠️ transformed,Stock normalized to number,

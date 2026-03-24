@@ -1,0 +1,9 @@
+Field,Source (products_all),Gastronom (shopify_from_gastronom),Status,Mapping Logic,Your Comment
+title,Pike Caviar,NOT FOUND IN shopify_from_gastronom,❌ missing in Gastronom export,"name -> title (RU/EN translation + exact product match needed)",
+handle,pike-caviar (from https://1-caviar.ae/products/pike-caviar),NOT FOUND IN shopify_from_gastronom,❌ missing in Gastronom export,"Extract from URL path /products/{handle}",
+url,https://1-caviar.ae/products/pike-caviar,https://www.gastronom.ae/products/pike-caviar (derived),⚠️ derived (not verified in export),"Build as https://www.gastronom.ae/products/{handle}",
+price,100.00 AED (promotional_price),MISSING,❌ missing,"Source current/sale price -> variants.price",
+compare_at_price,null (regular_price),MISSING,❌ missing,"Source old/list price -> variants.compare_at_price",
+description,present (long text),MISSING,❌ missing,"Source description -> Gastronom body_html; clean HTML/text",
+image,https://cdn.shopify.com/s/files/1/0791/8010/3977/files/CaviarPike.jpg?v=1713538135,NOT FOUND IN shopify_from_gastronom,❌ missing in Gastronom export,"Map URL to Gastronom image object/src (or keep canonical URL)",
+vendor,MISSING,Caviar N1,⚠️ source missing field,"Optional: set static/default vendor in transformed output",

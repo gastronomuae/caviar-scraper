@@ -1,0 +1,56 @@
+=== Caviar N1 ↔ Gastronom matching summary ===
+
+Supplier JSON: C:\coursor projects\caviar-scraper\Output\products_all.json
+  Total products in file: 66
+  In review scope (caviar/seafood filter): 24
+
+--- Supplier side (scoped rows only) ---
+  Confirmed (saved in product_mapping.json): 6
+  Marked “no match” (review state):          18
+  Auto: same handle as a Gastronom row:      0
+  Still needs review (no mapping, not no-match, no handle match): 0
+  (Sanity: 24 = 24)
+
+--- Duplication / collisions ---
+  Duplicate Gastronom rows (same shopify_product_id twice in from_gastronom.json): 0
+  Multiple Caviar N1 supplier handles → same Gastronom product (same GID in mapping): 0
+  (The reverse—a single supplier handle mapping to two Gastronom products—is impossible in product_mapping.json because each handle has one value.)
+
+--- Gastronom export (from_gastronom.json) ---
+  Products in export: 59
+  Not linked back to any Caviar N1 product in products_all.json: 33
+      (A row counts as linked if a supplier URL handle equals its handle, or some supplier handle maps to its shopify_product_id.)
+  Unpaired list:
+    • shrimps-magadan | Креветки Магаданские
+    • dried-smelt-koryushka-kamchatskaya-vyalennaya | Корюшка камчатская вяленая отборная
+    • dried-vobla-roe | Вобла вяленая (ломтики)
+    • dried-smelt-sakhalin | Корюшка сахалинская вяленая отборная
+    • cold-smoked-beluga-fillet | Филе белуги холодного копчения
+    • hot-smoked-beluga | Белуга горячего копчения
+    • hot-smoked-sturgeon-fillet | Филе осетра горячего копчения
+    • black-caviar-gold-osetra-50g | Золотистая осетровая икра Osetra Gold 50г.
+    • scallop-marinated-dill-garlic-dubai | Гребешок в маринаде с укропом и чесноком 500г.
+    • red-caviar-coho-salmon-big | Икра Кижуча 500г.
+    • red-caviar-coho-salmon-medium | Икра Кижуча 250г.
+    • red-caviar-coho-salmon-small | Икра Кижуча 125г.
+    • red-caviar-sockeye-salmon-big | Икра Нерки 500г.
+    • taran-dried-astrakhan | Тарань Вяленая Астрахань
+    • cold-smoked-mackerel | Скумбрия холодного копчения
+    • hot-smocked-mackerel | Скумбрия горячего копчения
+    • sibirian-luxury-bar-nelma-wind | Нежно подвяленная нельма 180г.
+    • siberian-luxury-bar-nelma-slabosol-tartar | Нельма слабой соли Тартар
+    • olyutorsky-herring-whole | Олюторская сельдь слабосоленная целая
+    • red-keta-caviar-dubai | Красная Икра Кеты 125г.
+    • red-caviar-sockeye-salmon-small | Икра Нерки 125г.
+    • red-caviar-keta-dubai | Красная Икра Кеты 500г.
+    • cod-liver-murmansk | Печень трески натуральная 100г.
+    • crab-meat-720g | Мясо краба камчатская 720г.
+    • crab-meat-520g | Мясо краба камчатская 520г.
+    • fish-ivasi | Сельдь Иваси
+    • nelma-in-the-wind | Нельма вяленая на ветру
+    • royal-salmon-yukola | Юкола из королевского лосося
+    • red-caviar-trout | Икра Форели
+    • red-caviar-sockeye-salmon-medium | Икра Нерки 250г.
+    • red-caviar-keta-dubai-1 | Красная Икра Кеты 250г.
+    • black-caviar-royal-osetra | Черная осетровая икра Royal Osetra 125г.
+    • black-caviar-imperial-gold | Черная икра Imperial Gold 125г
