@@ -146,8 +146,66 @@ Updated by **Confirm** in the UI (`POST /api/confirm`). This is the **confirmed*
 | GET | `/api/final-report` | JSON summary (confirmed / new / unmatched) |
 | POST | `/api/confirm` | Body: `source_handle`, `shopify_product_id` |
 | POST | `/api/no-match` | Body: `source_handle` |
+| POST | `/api/sync-gastronom` | Shopify Admin → refresh `Output/from_gastronom.json` (same work as `npm run sync:gastronom`) |
+| POST | `/api/unpaired-gastronom/draft-active` | Draft all ACTIVE products from `GET /api/unpaired-gastronom` |
+| POST | `/api/variants/sync-from-supplier` | Align a single mapped product’s variants (prices/policies/qty/weights) from supplier JSON; may auto-activate if product is DRAFT but at least one variant is sellable |
 
 Env: `REVIEW_PORT` (default `3001`), `PRODUCT_MATCH_BROAD` (`0` strict, `1` broad).
+
+---
+
+## 6.1 Daily Automation Runbook (supplier delta → sync → draft unpaired)
+
+Goal: automate end-of-day operations so that:
+- supplier changes propagate into Shopify **variants** for products that are already mapped
+- Gastronom-only products that are “not on supplier” get switched from **ACTIVE → DRAFT**
+- local JSON outputs are refreshed for the next run
+
+### Preconditions
+1. Review server is running: `npm run review` (UI at `http://localhost:3001` or your `REVIEW_PORT`).
+2. Shopify env/credentials are available (usually via `scripts/shopify-test/.env`).
+3. Outputs are present:
+   - `Output/products_all.json` (staged supplier snapshot used by delta + matching)
+   - `Output/from_gastronom.json` (Gastronom export used to detect “gastronom = true”)
+   - `Output/product_mapping.json` (confirmed handle → Shopify GID mapping)
+
+### Step A — Update supplier delta baseline
+1. Run/refresh supplier data (creates a “latest” snapshot):
+   - `npm run fetch:products-all`
+2. In the UI open `Supplier delta` and click **Publish latest to dashboard**
+   - This replaces `Output/products_all.json` with the staged “latest” file.
+
+### Step B — Sync variants for mapped updates
+Let `updates` be the `Updated` list from `supplier-delta` (handle changes in supplier).
+For each supplier handle `h` in `updates`:
+1. Read `Output/product_mapping.json[h]` → `gid` (mapped Shopify product id).
+2. Compute `gastronom = true`:
+   - `Output/from_gastronom.json` contains a row where `shopify_product_id == gid`.
+3. If both are true, run variant sync for that one product:
+   - `POST /api/variants/sync-from-supplier`
+   - Body: `{ "source_handle": h, "shopify_product_id": gid }`
+
+Notes:
+- The variant sync can auto-set a product to **ACTIVE** when the product is currently **DRAFT** but at least one variant ends up sellable
+  (policy `CONTINUE`, or `DENY` with `inventoryQuantity > 0`).
+
+### Step C — Draft unpaired Gastronom products
+1. Open **Gastronom: not on supplier** modal.
+2. Click **Set all ACTIVE unpaired → DRAFT in Shopify**
+   - This calls `POST /api/unpaired-gastronom/draft-active`.
+
+### Step D — Refresh Gastronom JSON after status changes
+Run one of:
+1. UI button **Fetch Gastronom from Shopify** (calls `POST /api/sync-gastronom`)
+2. CLI: `npm run sync:gastronom`
+
+This rewrites `Output/from_gastronom.json` so the next run sees current statuses.
+
+### Suggested order (important)
+1. Supplier delta publish
+2. Variants sync for mapped updates
+3. Draft unpaired ACTIVE → DRAFT
+4. Refresh Gastronom export JSON
 
 ---
 

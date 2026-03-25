@@ -237,7 +237,8 @@ function diffRows(prev, next) {
   return { added, removed, updated };
 }
 
-async function main() {
+/** Same as `npm run sync:gastronom`; safe to call from review-server (writes Output/from_gastronom.json). */
+async function runSyncGastronomFromShopify() {
   const vendor = (process.env.VENDOR || 'Caviar N1').trim();
   console.log(`Syncing Shopify vendor: ${vendor}`);
   console.log(`Shop: ${shopDomain()} (API ${apiVersion()})`);
@@ -249,7 +250,6 @@ async function main() {
   const products = await fetchAllVendorProducts(token, vendor);
   const nextArr = products.map(normalizeToGastronomFileShape);
 
-  // Backup
   if (fs.existsSync(OUT_PATH)) {
     fs.copyFileSync(OUT_PATH, `${OUT_PATH}.bak`);
   }
@@ -267,6 +267,23 @@ async function main() {
   console.log(`Wrote: ${OUT_PATH} (${nextArr.length} products)`);
   console.log(`Delta: +${delta.added.length} ~${delta.updated.length} -${delta.removed.length}`);
   console.log(`Wrote: ${DELTA_OUT_PATH}`);
+
+  return {
+    ok: true,
+    vendor,
+    shop: shopDomain(),
+    products: nextArr.length,
+    delta_counts: {
+      added: delta.added.length,
+      updated: delta.updated.length,
+      removed: delta.removed.length
+    },
+    paths: { from_gastronom: OUT_PATH, delta: DELTA_OUT_PATH }
+  };
+}
+
+async function main() {
+  await runSyncGastronomFromShopify();
 }
 
 if (require.main === module) {
@@ -276,4 +293,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { normalizeToGastronomFileShape };
+module.exports = { normalizeToGastronomFileShape, runSyncGastronomFromShopify };

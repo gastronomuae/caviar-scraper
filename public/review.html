@@ -307,7 +307,7 @@
     <button type="button" onclick="showUnpairedGastronom()">Gastronom: not on supplier</button>
     <button type="button" onclick="showUnpairedSupplier()">1-caviar: not in Gastronom</button>
     <button type="button" onclick="window.location.href='/supplier-delta'">Supplier delta</button>
-    <button type="button" onclick="showFinalReport()">Final summary JSON</button>
+    <button type="button" id="btn-sync-gastronom" title="Same as npm run sync:gastronom — refreshes Output/from_gastronom.json from Shopify" onclick="fetchGastronomFromShopify(this)">Fetch Gastronom from Shopify</button>
   </header>
   <main>
     <div id="mapping-warn"></div>
@@ -373,14 +373,6 @@
       </div>
       <p class="unpaired-summary" id="supplier-unpaired-summary"></p>
       <div class="unpaired-grid" id="supplier-unpaired-grid"></div>
-    </div>
-  </div>
-
-  <div class="modal-bg" id="final-modal">
-    <div class="modal">
-      <h2 style="margin-top:0;font-size:1rem;">Final report</h2>
-      <pre id="final-json" style="font-size:11px; overflow:auto; max-height:60vh;"></pre>
-      <button type="button" onclick="document.getElementById('final-modal').classList.remove('open')">Close</button>
     </div>
   </div>
 
@@ -801,8 +793,11 @@
         }
         if (!res.ok || !j?.ok) throw new Error(j?.error || text || 'Failed');
         const a = j.applied || {};
+        const activeNote = j.set_active_after_sync
+          ? ' Product set to ACTIVE (was DRAFT; at least one variant is sellable).'
+          : '';
         showInventoryFlash(
-          `Shopify updated: ${a.bulk_update_rows ?? 0} variant row(s), ${a.inventory_rows ?? 0} inventory row(s), ${a.option_values_added ?? 0} new option value(s). Card refreshed from live Shopify.`,
+          `Shopify updated: ${a.bulk_update_rows ?? 0} variant row(s), ${a.inventory_rows ?? 0} inventory row(s), ${a.option_values_added ?? 0} new option value(s). Card refreshed from live Shopify.${activeNote}`,
           false
         );
         try {
@@ -1222,11 +1217,43 @@
       document.getElementById('unpaired-modal').classList.remove('open');
     }
 
-    async function showFinalReport() {
-      const res = await fetch(API + '/api/final-report');
-      const j = await res.json();
-      document.getElementById('final-json').textContent = JSON.stringify(j, null, 2);
-      document.getElementById('final-modal').classList.add('open');
+    async function fetchGastronomFromShopify(btn) {
+      const el = btn || document.getElementById('btn-sync-gastronom');
+      const prev = el ? el.textContent : '';
+      try {
+        if (el) {
+          el.disabled = true;
+          el.textContent = 'Fetching…';
+        }
+        const res = await fetch(API + '/api/sync-gastronom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const text = await res.text();
+        let j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (_) {}
+        if (!res.ok) {
+          if (/cannot post/i.test(text) || /<!DOCTYPE/i.test(text)) {
+            throw new Error(
+              `API not on this server (got HTML ${res.status}). Open the app at http://localhost:${REVIEW_PORT}/ and restart npm run review so POST /api/sync-gastronom is registered.`
+            );
+          }
+          throw new Error(j?.error || text.slice(0, 400) || res.statusText);
+        }
+        if (!j?.ok) throw new Error(j?.error || 'Sync failed');
+        const d = j.delta_counts || {};
+        showInventoryFlash(
+          `Gastronom: refreshed ${j.products} products from Shopify (+${d.added ?? 0} / ~${d.updated ?? 0} / −${d.removed ?? 0}).`,
+          false
+        );
+        await load();
+      } catch (e) {
+        showInventoryFlash(`Fetch Gastronom: ${String(e.message || e)}`, true);
+      } finally {
+        if (el) {
+          el.disabled = false;
+          el.textContent = prev || 'Fetch Gastronom from Shopify';
+        }
+      }
     }
 
     function openSearch() {

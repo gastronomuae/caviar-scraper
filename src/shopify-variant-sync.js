@@ -2,7 +2,8 @@ const {
   getAccessToken,
   graphql,
   getLocationIdByName,
-  getInventoryItemIdForVariant
+  getInventoryItemIdForVariant,
+  setProductStatus
 } = require('./shopify-inventory');
 
 function gramsFromSupplierVariant(v) {
@@ -66,7 +67,21 @@ function normalizeProductFromQuery(data) {
   const options = Array.isArray(p.options) ? p.options : [];
   const edges = p?.variants?.edges || [];
   const variants = edges.map((e) => e?.node).filter(Boolean);
-  return { id: p.id, title: p.title, options, variants };
+  return { id: p.id, title: p.title, status: p.status ?? null, options, variants };
+}
+
+/** At least one variant can be purchased: CONTINUE (sell when out of stock) or DENY with available qty &gt; 0. */
+function productHasSellableVariant(product) {
+  const variants = product?.variants || [];
+  if (!variants.length) return false;
+  for (const v of variants) {
+    const policy = String(v.inventoryPolicy || '').toUpperCase();
+    const qtyRaw = v.inventoryQuantity;
+    const qty = qtyRaw != null && Number.isFinite(Number(qtyRaw)) ? Math.max(0, Number(qtyRaw)) : 0;
+    if (policy === 'CONTINUE') return true;
+    if (policy === 'DENY' && qty > 0) return true;
+  }
+  return false;
 }
 
 function getWeightOption(product) {
@@ -160,6 +175,7 @@ async function fetchProductForSync(token, productId) {
       product(id: $id) {
         id
         title
+        status
         options {
           id
           name
@@ -172,6 +188,7 @@ async function fetchProductForSync(token, productId) {
               id
               title
               price
+              inventoryQuantity
               inventoryPolicy
               inventoryItem { id }
               selectedOptions { name value }
@@ -206,6 +223,7 @@ async function productOptionUpdateAddValues(token, productId, optionId, names) {
                 id
                 title
                 price
+                inventoryQuantity
                 inventoryPolicy
                 inventoryItem { id }
                 selectedOptions { name value }
@@ -386,16 +404,27 @@ async function executeVariantSyncFromSupplier(productGid, supplierProduct, locat
   }
 
   const finalNorm = await fetchProductForSync(token, productGid);
+  const forStatus = finalNorm || productNorm;
+  let setActiveAfterSync = false;
+  const statusNow = String(forStatus?.status || '')
+    .trim()
+    .toUpperCase();
+  if (statusNow === 'DRAFT' && productHasSellableVariant(forStatus)) {
+    await setProductStatus(productNorm.id, 'ACTIVE');
+    setActiveAfterSync = true;
+  }
+
   return {
     ok: true,
     dryRun: false,
     productId: productNorm.id,
-    plan: buildVariantSyncPlan(supplierProduct, finalNorm || productNorm),
+    plan: buildVariantSyncPlan(supplierProduct, forStatus),
     applied: {
       bulk_update_rows: bulkInputs.length,
       inventory_rows: invItems.length,
       option_values_added: namesToAdd.length
-    }
+    },
+    set_active_after_sync: setActiveAfterSync
   };
 }
 

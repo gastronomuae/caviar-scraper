@@ -53,9 +53,14 @@ const {
   getUnpairedSupplierProducts,
   PATHS
 } = require('./product-match');
-const { normalizeToGastronomFileShape } = require('./sync-shopify-gastronom');
+const {
+  normalizeToGastronomFileShape,
+  runSyncGastronomFromShopify
+} = require('./sync-shopify-gastronom');
 
 const app = express();
+/** @type {Promise<unknown> | null} */
+let gastronomSyncInFlight = null;
 const PORT = Number(process.env.REVIEW_PORT || 3001);
 const PUBLIC = path.join(__dirname, '../public');
 const SNAP_DIR = path.join(__dirname, '../Output/snapshots/supplier');
@@ -280,6 +285,22 @@ app.get('/api/final-report', (req, res) => {
     res.json(finalReport());
   } catch (e) {
     res.status(500).json({ error: String(e.message) });
+  }
+});
+
+/** Pull Gastronom catalog from Shopify (same as `npm run sync:gastronom`). Requires review server + Shopify env. */
+app.post('/api/sync-gastronom', async (req, res) => {
+  if (gastronomSyncInFlight) {
+    return res.status(409).json({ ok: false, error: 'Gastronom sync already running; wait for it to finish.' });
+  }
+  gastronomSyncInFlight = runSyncGastronomFromShopify().finally(() => {
+    gastronomSyncInFlight = null;
+  });
+  try {
+    const result = await gastronomSyncInFlight;
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
@@ -567,11 +588,18 @@ app.get('/api/gastronom-product-live', async (req, res) => {
   }
 });
 
-app.use(express.static(PUBLIC));
+/** So the UI's apiOrigin() talks to this process (not a stale server on :3001 when REVIEW_PORT differs). */
+function sendReviewHtml(res) {
+  const htmlPath = path.join(PUBLIC, 'review.html');
+  let html = fs.readFileSync(htmlPath, 'utf8');
+  html = html.replace(/const REVIEW_PORT = '3001';/, `const REVIEW_PORT = '${PORT}';`);
+  res.type('html').send(html);
+}
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(PUBLIC, 'review.html'));
-});
+app.get('/', (req, res) => sendReviewHtml(res));
+app.get('/review.html', (req, res) => sendReviewHtml(res));
+
+app.use(express.static(PUBLIC));
 
 app.get('/supplier-delta', (req, res) => {
   res.sendFile(path.join(PUBLIC, 'supplier-delta.html'));
@@ -582,7 +610,7 @@ ensureFiles();
 const server = app.listen(PORT, () => {
   console.log(`Match review UI: http://localhost:${PORT}`);
   console.log(
-    `API: /api/report, /api/unpaired-gastronom, /api/unpaired-supplier, /api/confirm, /api/no-match, /api/search?q=`
+    `API: /api/report, /api/sync-gastronom (POST), /api/unpaired-gastronom, /api/unpaired-supplier, /api/confirm, /api/no-match, /api/search?q=`
   );
   console.log('Inventory + full variant sync: productVariantsBulkUpdate / productOptionUpdate / variant sync API (restart after editing src/).');
 });
