@@ -4,7 +4,8 @@ const path = require('path');
 
 const BASE = 'https://1-caviar.ae';
 const LIMIT = 250;
-const OUT = path.join(__dirname, '../Output/products_all.json');
+// Staging workflow: scraper writes "latest" and dashboard uses staged products_all.json.
+const OUT = path.join(__dirname, '../Output/products_all.latest.json');
 
 /** Only these Shopify collection handles are fetched (edit to add/remove). Site: /collections/{handle}/products.json */
 const COLLECTION_HANDLES = ['caviar', 'seafood'];

@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Supplier delta (Today vs Yesterday)</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3d8bfd;
+      --ok: #3fb950;
+      --warn: #d4a72c;
+      --bad: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, Segoe UI, Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 12px 20px;
+      border-bottom: 1px solid #2d3a4f;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 1rem; font-weight: 600; margin: 0; }
+    header a { color: var(--accent); text-decoration: none; }
+    header a:hover { text-decoration: underline; }
+    a { color: var(--accent); }
+    a:visited { color: var(--accent); }
+    main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+    button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid #3d4f6f;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { border-color: var(--accent); }
+    .panel {
+      background: var(--panel);
+      border: 1px solid #2d3a4f;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .meta { color: var(--muted); font-size: 0.9rem; }
+    .kpi { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid #3d4f6f;
+      background: var(--bg);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .pill.ok { border-color: var(--ok); color: var(--ok); }
+    .pill.warn { border-color: var(--warn); color: var(--warn); }
+    .pill.bad { border-color: var(--bad); color: var(--bad); }
+    details { border-top: 1px solid #2d3a4f; padding-top: 12px; margin-top: 12px; }
+    summary { cursor: pointer; user-select: none; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid #2d3a4f; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.8rem; }
+    code { font-size: 0.85em; color: var(--muted); }
+    .chg { color: var(--text); font-size: 0.9rem; }
+    .namecell { display: flex; gap: 10px; align-items: flex-start; }
+    .thumb {
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      background: #0a0e14;
+      object-fit: contain;
+      flex: 0 0 auto;
+      border: 1px solid #2d3a4f;
+    }
+    .namecell .t { min-width: 0; }
+    .namecell .t .n { font-weight: 600; }
+    .namecell .t .u { margin-top: 4px; }
+    .ms {
+      margin-top: 4px;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+    .delta-block { margin: 10px 0 10px; font-weight: 700; }
+    .diff-line code { color: var(--text); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Supplier delta (Today vs Yesterday)</h1>
+    <span class="meta">Compare supplier `products_all.json` day-on-day</span>
+    <span style="flex:1 1 auto;"></span>
+    <a href="/">← Back to dashboard</a>
+  </header>
+
+  <main>
+    <div class="row">
+      <button type="button" onclick="saveSnapshot()">Save snapshot now</button>
+      <button type="button" onclick="publishLatest()">Publish latest to dashboard</button>
+      <button type="button" onclick="load()">Refresh</button>
+      <span class="meta" id="status"></span>
+    </div>
+
+    <div class="panel" id="summary">
+      <div class="meta">Loading…</div>
+    </div>
+
+    <div class="panel" id="lists" style="display:none;">
+      <details open>
+        <summary><strong>Added</strong> <span class="meta" id="cnt-added"></span></summary>
+        <div id="tbl-added"></div>
+      </details>
+      <details>
+        <summary><strong>Removed</strong> <span class="meta" id="cnt-removed"></span></summary>
+        <div id="tbl-removed"></div>
+      </details>
+      <details open>
+        <summary><strong>Updated</strong> <span class="meta" id="cnt-updated"></span></summary>
+        <div id="tbl-updated"></div>
+      </details>
+    </div>
+  </main>
+
+  <script>
+    function escapeHtml(t) {
+      const d = document.createElement('div');
+      d.textContent = t == null ? '' : String(t);
+      return d.innerHTML;
+    }
+
+    function tableSimple(rows) {
+      if (!rows || rows.length === 0) return '<div class="meta" style="margin-top:10px;">—</div>';
+      return `
+        <table>
+          <thead><tr><th>Product</th><th>Handle</th><th>URL</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td>
+                  <div class="namecell">
+                    ${r.image ? `<img class="thumb" src="${escapeHtml(r.image)}" alt="" />` : '<div class="thumb"></div>'}
+                    <div class="t">
+                      <div class="n">${escapeHtml(r.name || '')}</div>
+                      <div class="ms">${escapeHtml(r.match_status || '')}</div>
+                    </div>
+                  </div>
+                </td>
+                <td><code>${escapeHtml(r.handle || '')}</code></td>
+                <td>${r.url ? `<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">open</a>` : '—'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function tableUpdated(rows) {
+      if (!rows || rows.length === 0) return '<div class="meta" style="margin-top:10px;">—</div>';
+      return `
+        <table>
+          <thead><tr><th>Product</th><th>Handle</th><th>What changed</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td>
+                  <div class="namecell">
+                    ${r.image ? `<img class="thumb" src="${escapeHtml(r.image)}" alt="" />` : '<div class="thumb"></div>'}
+                    <div class="t">
+                      <div class="n">${escapeHtml(r.name || '')}</div>
+                      <div class="ms">${escapeHtml(r.match_status || '')}</div>
+                      <div class="u">${r.url ? `<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">open</a>` : ''}</div>
+                    </div>
+                  </div>
+                </td>
+                <td><code>${escapeHtml(r.handle || '')}</code></td>
+                <td class="chg">
+                  <details open>
+                    <summary>${escapeHtml((r.changed || []).map(c => taxonomyLabel(c.field)).join(' · '))}</summary>
+                    <div style="margin-top:8px;">
+                      ${(r.changed || []).map(renderChange).join('')}
+                    </div>
+                  </details>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function taxonomyLabel(field) {
+      const f = String(field || '');
+      if (f === 'promotional_price') return 'Price';
+      if (f === 'regular_price') return 'Compare-at price';
+      if (f === 'variants') return 'Variants';
+      return f;
+    }
+
+    function renderChange(c) {
+      if (!c) return '';
+      const f = String(c.field || '');
+      if (f !== 'variants') {
+        return `<div class="meta" style="margin:6px 0;">
+          <strong>${escapeHtml(taxonomyLabel(f))}</strong>: <code>${escapeHtml(String(c.from))}</code> → <code>${escapeHtml(String(c.to))}</code>
+        </div>`;
+      }
+      return renderVariantsDiff(c.from, c.to);
+    }
+
+    function byVariantId(arr) {
+      const m = new Map();
+      for (const v of Array.isArray(arr) ? arr : []) {
+        const id = v && v.variant_id != null ? String(v.variant_id) : null;
+        if (!id) continue;
+        m.set(id, v);
+      }
+      return m;
+    }
+
+    function variantSummary(v) {
+      if (!v) return '—';
+      const w = v.weight != null ? String(v.weight) : '—';
+      const p = v.promotional_price != null ? String(v.promotional_price) : v.regular_price != null ? String(v.regular_price) : '—';
+      const avail = v.available === false || v.out_of_stock ? 'out_of_stock' : v.unlimited_stock ? 'unlimited' : v.limited_stock ? 'limited' : '—';
+      const qty = v.qty != null ? ` qty=${v.qty}` : '';
+      return `${w}g · ${p} · ${avail}${qty}`;
+    }
+
+    function variantLabel(id, a, b) {
+      const w = (b && b.weight != null ? b.weight : a && a.weight != null ? a.weight : null);
+      const wStr = w != null && String(w).trim() !== '' ? ` Weight=${String(w)}` : '';
+      return `Variant ${id}${wStr ? ' · ' + wStr : ''}`;
+    }
+
+    function diffVariantFields(a, b) {
+      const fields = [
+        'weight',
+        'promotional_price',
+        'regular_price',
+        'qty',
+        'unlimited_stock',
+        'limited_stock',
+        'out_of_stock',
+        'available'
+      ];
+      const changes = [];
+      for (const f of fields) {
+        const av = a ? a[f] : undefined;
+        const bv = b ? b[f] : undefined;
+        if (JSON.stringify(av) !== JSON.stringify(bv)) changes.push({ field: f, from: av, to: bv });
+      }
+      return changes;
+    }
+
+    function renderVariantsDiff(fromArr, toArr) {
+      const A = byVariantId(fromArr);
+      const B = byVariantId(toArr);
+      const added = [];
+      const removed = [];
+      const changed = [];
+
+      for (const [id, v] of B) if (!A.has(id)) added.push({ id, v });
+      for (const [id, v] of A) if (!B.has(id)) removed.push({ id, v });
+      for (const [id, a] of A) {
+        const b = B.get(id);
+        if (!b) continue;
+        if (JSON.stringify(a) !== JSON.stringify(b)) changed.push({ id, a, b });
+      }
+
+      const lines = [];
+      if (added.length) {
+        lines.push(`<div class="delta-block meta"><strong>Added variants</strong>: ${added.length}</div>`);
+        lines.push(`<ul class="meta" style="margin:6px 0 10px 18px;">${added.map(x => `<li><strong>${escapeHtml(variantLabel(x.id, null, x.v))}</strong> — ${escapeHtml(variantSummary(x.v))}</li>`).join('')}</ul>`);
+      }
+      if (removed.length) {
+        lines.push(`<div class="delta-block meta"><strong>Removed variants</strong>: ${removed.length}</div>`);
+        lines.push(`<ul class="meta" style="margin:6px 0 10px 18px;">${removed.map(x => `<li><strong>${escapeHtml(variantLabel(x.id, x.v, null))}</strong> — ${escapeHtml(variantSummary(x.v))}</li>`).join('')}</ul>`);
+      }
+      if (changed.length) {
+        lines.push(`<div class="delta-block meta"><strong>Updated variants</strong>: ${changed.length}</div>`);
+        lines.push(
+          `<ul class="meta" style="margin:6px 0 10px 18px;">${changed
+            .map((x) => {
+              const diffs = diffVariantFields(x.a, x.b);
+              const diffsHtml = diffs.length
+                ? `<ul class="meta" style="margin:6px 0 0 18px;">${diffs
+                    .map(
+                      (d) =>
+                        `<li class="diff-line"><strong>${escapeHtml(d.field)}</strong>: <code>${escapeHtml(String(d.from))}</code> → <code>${escapeHtml(
+                          String(d.to)
+                        )}</code></li>`
+                    )
+                    .join('')}</ul>`
+                : '';
+              return `<li><strong>${escapeHtml(variantLabel(x.id, x.a, x.b))}</strong> updated${diffsHtml}</li>`;
+            })
+            .join('')}</ul>`
+        );
+      }
+      if (!lines.length) return `<div class="meta" style="margin:6px 0;"><strong>variants</strong>: changed</div>`;
+      return `<div style="margin:6px 0;"><strong>variants</strong></div>${lines.join('')}`;
+    }
+
+    async function saveSnapshot() {
+      const status = document.getElementById('status');
+      status.textContent = 'Saving snapshot…';
+      const res = await fetch('/api/supplier-snapshot', { method: 'POST' });
+      const txt = await res.text();
+      if (!res.ok) {
+        status.textContent = 'Snapshot failed';
+        alert(txt);
+        return;
+      }
+      const data = JSON.parse(txt);
+      status.textContent = `Saved ${data.saved} (${data.count} products)`;
+      await load();
+    }
+
+    async function load() {
+      const status = document.getElementById('status');
+      status.textContent = 'Loading…';
+      const res = await fetch('/api/supplier-delta');
+      const txt = await res.text();
+      if (!res.ok) {
+        status.textContent = 'Failed to load';
+        alert(txt);
+        return;
+      }
+      const data = JSON.parse(txt);
+      const summary = document.getElementById('summary');
+      const lists = document.getElementById('lists');
+
+      if (!data.ok) {
+        lists.style.display = 'none';
+        summary.innerHTML = `
+          <div><strong>Not ready yet</strong></div>
+          <div class="meta" style="margin-top:8px;">${escapeHtml(data.message || '')}</div>
+          ${data.latest_path ? `<div class="meta" style="margin-top:8px;">Latest path: <code>${escapeHtml(data.latest_path)}</code></div>` : ''}
+        `;
+        status.textContent = '';
+        return;
+      }
+
+      lists.style.display = 'block';
+      summary.innerHTML = `
+        <div class="meta">Mode: <code>${escapeHtml(data.mode || '')}</code></div>
+        <div class="meta" style="margin-top:6px;">Staged: <code>${escapeHtml(data.files?.staged || '')}</code> (${escapeHtml(String(data.counts_source?.staged ?? '—'))}) · Latest: <code>${escapeHtml(data.files?.latest || '')}</code> (${escapeHtml(String(data.counts_source?.latest ?? '—'))})</div>
+        <div class="kpi">
+          <span class="pill ok">Added: ${data.counts.added}</span>
+          <span class="pill bad">Removed: ${data.counts.removed}</span>
+          <span class="pill warn">Updated: ${data.counts.updated}</span>
+        </div>
+      `;
+
+      document.getElementById('cnt-added').textContent = `(${data.counts.added})`;
+      document.getElementById('cnt-removed').textContent = `(${data.counts.removed})`;
+      document.getElementById('cnt-updated').textContent = `(${data.counts.updated})`;
+
+      document.getElementById('tbl-added').innerHTML = tableSimple(data.delta.added);
+      document.getElementById('tbl-removed').innerHTML = tableSimple(data.delta.removed);
+      document.getElementById('tbl-updated').innerHTML = tableUpdated(data.delta.updated);
+      status.textContent = '';
+    }
+
+    async function publishLatest() {
+      const status = document.getElementById('status');
+      if (!confirm('Publish latest supplier file to dashboard? This will replace Output/products_all.json with Output/products_all.latest.json.')) {
+        return;
+      }
+      status.textContent = 'Publishing…';
+      const res = await fetch('/api/supplier-publish', { method: 'POST' });
+      const txt = await res.text();
+      if (!res.ok) {
+        status.textContent = 'Publish failed';
+        alert(txt);
+        return;
+      }
+      const data = JSON.parse(txt);
+      status.textContent = `Published (${data.count} products)`;
+      await load();
+    }
+
+    load();
+  </script>
+</body>
+</html>
+

@@ -9,6 +9,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const MAP = path.join(ROOT, 'Output/product_mapping.json');
+// Use staged supplier file (approved for dashboard).
 const ALL = path.join(ROOT, 'Output/products_all.json');
 
 function handleFromUrl(url) {

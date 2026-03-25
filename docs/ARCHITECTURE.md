@@ -53,7 +53,14 @@ This repo **does not** call Shopify Admin GraphQL for writes in the review flow;
 └──────────────────────────┘
 ```
 
-**Secondary HTTP service:** `server.js` on port **3000** accepts a **full product array** from Make (or similar). It **upserts by `shopify_product_id` (preferred) or `handle`**: same key → row replaced (price, `Product Status`, etc.); new key → added; keys missing from the payload are **removed** from the file (snapshot). **`Output/product_mapping.json` is not modified** — supplier↔GID confirmations stay intact. **Safety:** if the saved file already has ≥`GASTRONOM_SYNC_PROTECT_MIN_EXISTING` keyed rows (default **5**) and the new batch would **shrink** keyed rows below **max(2, ceil(existing × GASTRONOM_SYNC_SHRINK_MIN_FRACTION))** (default fraction **0.2**), the write is **rejected** with HTTP **409** (avoids Make sending one row and wiping the catalog). Override with **`?force=1`** or header **`x-gastronom-force-replace: 1`**. Before each successful write, the previous file is copied to **`Output/from_gastronom.json.bak`** (name overridable via `GASTRONOM_BACKUP_NAME`). Validate auth at a reverse proxy in production.
+**Secondary HTTP service:** `server.js` on port **3000** accepts Gastronom payloads from Make (or similar).
+
+- **Default (delta upsert)**: regardless of whether Make sends **one product** or an **array**, the server **upserts only the products in the payload** and keeps all other rows unchanged (**no deletions**).
+- **Optional snapshot**: `POST /gastronom?mode=snapshot` treats the payload array as the **full catalog** and removes keys not present in that batch.
+
+**`Output/product_mapping.json` is not modified** — supplier↔GID confirmations stay intact.
+
+**Safety (snapshot only):** if the saved file already has ≥`GASTRONOM_SYNC_PROTECT_MIN_EXISTING` keyed rows (default **5**) and the new batch would **shrink** keyed rows below **max(2, ceil(existing × GASTRONOM_SYNC_SHRINK_MIN_FRACTION))** (default fraction **0.2**), the write is **rejected** with HTTP **409** (avoids Make sending one row and wiping the catalog). Override with **`?force=1`** or header **`x-gastronom-force-replace: 1`**. Before each successful write, the previous file is copied to **`Output/from_gastronom.json.bak`** (name overridable via `GASTRONOM_BACKUP_NAME`). Validate auth at a reverse proxy in production.
 
 ---
 

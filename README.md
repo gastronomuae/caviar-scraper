@@ -21,7 +21,12 @@ npm install
 | Normalize Gastronom JSON | `npm run normalize:gastronom` |
 | Prune stale `product_mapping.json` keys | `npm run mapping:prune` |
 
-**Ingest webhook** (POST a **full** product JSON array; **upsert** by `shopify_product_id` or `handle`, keys not in the payload are removed from `Output/from_gastronom.json`; `product_mapping.json` is unchanged). **Guards:** rejects suspicious **shrink** (partial Make payload) with **409** unless `?force=1` or header `x-gastronom-force-replace: 1`; backs up previous file to `Output/from_gastronom.json.bak`. See `docs/ARCHITECTURE.md` for env tunables.
+**Ingest webhook**
+
+- **Default (delta upsert)**: POST **one product** or an **array**. The server will **only update/add the products you sent** and keep the rest unchanged (no deletions).
+- **Optional snapshot**: add `?mode=snapshot` to treat the body array as the full catalog (missing keys are removed). Protected by the shrink guard unless you force it.
+
+`product_mapping.json` is unchanged. **Guards (snapshot only):** rejects suspicious **shrink** (partial Make payload) with **409** unless `?force=1` or header `x-gastronom-force-replace: 1`; backs up previous file to `Output/from_gastronom.json.bak`. See `docs/ARCHITECTURE.md` for env tunables.
 
 ```bash
 node src/server.js   # listens on port 3000

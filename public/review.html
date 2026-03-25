@@ -71,6 +71,18 @@
     }
     .line { margin: 6px 0; font-size: 0.95rem; }
     .line strong { color: var(--muted); font-weight: 500; display: inline-block; min-width: 90px; }
+    .desc-line {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: 8px;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-height: 1.35em; /* keep supplier card height stable */
+    }
     .status-badge {
       display: inline-block;
       padding: 4px 10px;
@@ -219,6 +231,60 @@
       margin: 0;
       padding: 6px 12px;
     }
+    .variants {
+      margin-top: 10px;
+      border-top: 1px solid #2d3a4f;
+      padding-top: 10px;
+    }
+    .variants .vtitle {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin: 0 0 8px;
+    }
+    .variants table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    .variants th, .variants td {
+      text-align: left;
+      padding: 6px 6px;
+      border-bottom: 1px solid #2d3a4f;
+      vertical-align: top;
+    }
+    .variants th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.75rem;
+    }
+    .qty-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      border: 1px solid #3d4f6f;
+      background: var(--bg);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .qty-pill.ok { border-color: var(--ok); color: var(--ok); }
+    .qty-pill.warn { border-color: var(--warn); color: var(--warn); }
+    .qty-pill.bad { border-color: var(--bad); color: var(--bad); }
+    .ps-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      margin-left: 6px;
+      border: 1px solid #3d4f6f;
+      background: var(--bg);
+      color: var(--muted);
+      vertical-align: middle;
+    }
+    .ps-active { border-color: var(--ok); color: var(--ok); }
+    .ps-draft { border-color: var(--warn); color: var(--warn); }
   </style>
 </head>
 <body>
@@ -228,6 +294,7 @@
     <button type="button" onclick="downloadCsv()">Download CSV report</button>
     <button type="button" onclick="showUnpairedGastronom()">Gastronom: not on supplier</button>
     <button type="button" onclick="showUnpairedSupplier()">1-caviar: not in Gastronom</button>
+    <button type="button" onclick="window.location.href='/supplier-delta'">Supplier delta</button>
     <button type="button" onclick="showFinalReport()">Final summary JSON</button>
   </header>
   <main>
@@ -235,6 +302,11 @@
     <div class="nav-row">
       <button type="button" onclick="prev()">← Previous</button>
       <button type="button" onclick="next()">Next →</button>
+      <span style="flex:1 1 auto;"></span>
+      <button type="button" id="filter-no-match" class="danger" onclick="setFilter('no_match')">❌ No match</button>
+      <button type="button" id="filter-needs-review" onclick="setFilter('needs_review')">⚠️ Needs review</button>
+      <button type="button" id="filter-confirmed" class="success" onclick="setFilter('confirmed')">✅ Confirmed</button>
+      <button type="button" id="filter-all" onclick="setFilter('all')">All</button>
       <span id="idx-label" class="meta"></span>
     </div>
     <div id="status-bar"></div>
@@ -306,6 +378,10 @@
     }
     const API = apiOrigin();
 
+    /** @type {'no_match'|'needs_review'|'confirmed'|'all'} */
+    let filterMode = 'no_match';
+    /** Unfiltered report rows from /api/report */
+    let rowsAll = [];
     let rows = [];
     let idx = 0;
     let selectedShopifyId = null;
@@ -321,6 +397,32 @@
       return 'st-review';
     }
 
+    function applyFilter() {
+      const list = rowsAll || [];
+      const isNoMatch = (r) => String(r?.status || '').includes('no match');
+      const isNeedsReview = (r) => String(r?.status || '').includes('needs review');
+      const isConfirmed = (r) => String(r?.status || '').includes('confirmed');
+      if (filterMode === 'no_match') rows = list.filter(isNoMatch);
+      else if (filterMode === 'needs_review') rows = list.filter(isNeedsReview);
+      else if (filterMode === 'confirmed') rows = list.filter(isConfirmed);
+      else rows = list;
+
+      idx = Math.min(idx, Math.max(0, rows.length - 1));
+      manualPick = null;
+      selectedShopifyId = null;
+      selectedRowSuggestionIndex = null;
+      render();
+    }
+
+    function setFilter(mode) {
+      filterMode = mode;
+      document.getElementById('filter-no-match').classList.toggle('primary', mode === 'no_match');
+      document.getElementById('filter-needs-review').classList.toggle('primary', mode === 'needs_review');
+      document.getElementById('filter-confirmed').classList.toggle('primary', mode === 'confirmed');
+      document.getElementById('filter-all').classList.toggle('primary', mode === 'all');
+      applyFilter();
+    }
+
     function priceDiffLabel(supPrice, shopPrice) {
       if (supPrice == null || shopPrice == null) return '';
       const d = shopPrice - supPrice;
@@ -329,12 +431,44 @@
       return `<div class="price-diff ${cls}">Δ price: ${d > 0 ? '+' : ''}${d.toFixed(2)} (${pct}% vs supplier)</div>`;
     }
 
+    function shouldHideScoreLine(m) {
+      const score = Number(m?.score);
+      const reason = String(m?.reason || '').trim().toLowerCase();
+      // For already-confirmed matches, the score/reason is noisy.
+      return score === 100 && (reason === 'saved_mapping' || reason === 'exact_handle');
+    }
+
+    function productStatusBadge(m) {
+      const st = String(m?.product_status || m?.raw?.['Product Status'] || '').trim().toUpperCase();
+      if (!st || st === '—') return '';
+      const cls = st === 'ACTIVE' ? 'ps-active' : st === 'DRAFT' ? 'ps-draft' : '';
+      return `<span class="ps-badge ${cls}">${escapeHtml(st)}</span>`;
+    }
+
     function render() {
       const r = rows[idx];
-      if (!r) return;
+      if (!r) {
+        document.getElementById('idx-label').textContent = rowsAll?.length
+          ? `No results for filter`
+          : 'No results';
+        document.getElementById('hdr-meta').textContent = `${rowsAll?.length || 0} supplier rows (caviar/seafood filter)`;
+        document.getElementById('status-bar').innerHTML =
+          `<span class="status-badge st-none">Nothing to show. Try switching filter to All.</span>`;
+        document.getElementById('supplier-block').innerHTML = `<p class="meta">—</p>`;
+        document.getElementById('matches-block').innerHTML = `<p class="meta">—</p>`;
+        return;
+      }
       const s = r.supplier;
       document.getElementById('idx-label').textContent = `Product ${idx + 1} / ${rows.length}`;
-      document.getElementById('hdr-meta').textContent = `${rows.length} supplier rows (caviar/seafood filter)`;
+      const suffix =
+        filterMode === 'no_match'
+          ? ' · filter: no match'
+          : filterMode === 'needs_review'
+            ? ' · filter: needs review'
+          : filterMode === 'confirmed'
+            ? ' · filter: confirmed'
+            : '';
+      document.getElementById('hdr-meta').textContent = `${rowsAll?.length || rows.length} supplier rows (caviar/seafood filter)${suffix}`;
 
       document.getElementById('status-bar').innerHTML =
         `<span class="status-badge ${badgeClass(r.status)}">${escapeHtml(r.status)}</span>`;
@@ -345,7 +479,8 @@
         <div class="line"><strong>Handle</strong> ${escapeHtml(s.handle)}</div>
         <div class="line"><strong>Price</strong> ${s.price != null ? escapeHtml(String(s.price)) : '—'}</div>
         <div class="line"><strong>Weight</strong> ${s.weight != null ? escapeHtml(String(s.weight)) + ' g' : '—'}</div>
-        <div class="line" style="font-size:0.85rem;color:var(--muted);margin-top:8px;">${escapeHtml((s.description_en || '').slice(0, 400))}${(s.description_en || '').length > 400 ? '…' : ''}</div>
+        <div class="desc-line">${escapeHtml((s.description_en || '').replace(/\\s+/g,' ').trim())}</div>
+        ${renderVariantsTable({ title: 'Supplier variants', variants: s.raw?.variants || [], kind: 'supplier', limit: 6 })}
       `;
 
       const mb = document.getElementById('matches-block');
@@ -358,16 +493,20 @@
           m.score != null && m.score !== '' && m.score !== '—'
             ? `${escapeHtml(String(m.score))}%`
             : '—';
+        const scoreHtml = shouldHideScoreLine(m)
+          ? ''
+          : `<div class="score">Score: ${scoreLabel} ${m.reason ? '· ' + escapeHtml(m.reason) : ''}</div>`;
         parts.push(`
           <div class="match-card selected" data-i="manual" data-gid="${escapeAttr(m.shopify_product_id || '')}" onclick="selectMatch(this)">
             <div class="line" style="color:var(--accent);font-size:0.8rem;margin-bottom:8px;">Manual search — click Confirm when ready</div>
             ${m.image ? `<img class="match-img" src="${escapeAttr(m.image)}" alt="" />` : ''}
-            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)}</div>
+            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)} ${productStatusBadge(m)}</div>
             <div class="line"><strong>Handle</strong> ${escapeHtml(m.handle)}</div>
             <div class="line"><strong>Price</strong> ${m.price != null ? escapeHtml(String(m.price)) : '—'}</div>
             <div class="line"><strong>Weight</strong> ${m.weight != null ? escapeHtml(String(m.weight)) + ' g' : '—'}</div>
-            <div class="score">Score: ${scoreLabel} ${m.reason ? '· ' + escapeHtml(m.reason) : ''}</div>
+            ${scoreHtml}
             ${diff}
+            ${renderVariantsTable({ title: 'Gastronom variants', variants: m.raw?.variants || [], kind: 'gastronom', limit: 6 })}
           </div>
         `);
         selectedShopifyId = m.shopify_product_id || null;
@@ -377,19 +516,28 @@
         selectedRowSuggestionIndex = null;
       }
 
+      const showOnlyConfirmedCard = filterMode === 'confirmed';
+      const suggestionsToRender = showOnlyConfirmedCard
+        ? [r.suggestions.find((x) => x != null)].filter(Boolean)
+        : r.suggestions;
+
       parts.push(
-        ...r.suggestions.map((m, i) => {
+        ...suggestionsToRender.map((m, i) => {
           if (!m) return `<div class="match-card muted">—</div>`;
           const diff = priceDiffLabel(s.price, m.price);
+          const scoreHtml = shouldHideScoreLine(m)
+            ? ''
+            : `<div class="score">Score: ${m.score != null ? escapeHtml(String(m.score)) : '—'}% ${m.reason ? '· ' + escapeHtml(m.reason) : ''}</div>`;
           return `
           <div class="match-card" data-i="${i}" data-gid="${escapeAttr(m.shopify_product_id || '')}" onclick="selectMatch(this)">
             ${m.image ? `<img class="match-img" src="${escapeAttr(m.image)}" alt="" />` : ''}
-            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)}</div>
+            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)} ${productStatusBadge(m)}</div>
             <div class="line"><strong>Handle</strong> ${escapeHtml(m.handle)}</div>
             <div class="line"><strong>Price</strong> ${m.price != null ? escapeHtml(String(m.price)) : '—'}</div>
             <div class="line"><strong>Weight</strong> ${m.weight != null ? escapeHtml(String(m.weight)) + ' g' : '—'}</div>
-            <div class="score">Score: ${m.score != null ? escapeHtml(String(m.score)) : '—'}% ${m.reason ? '· ' + escapeHtml(m.reason) : ''}</div>
+            ${scoreHtml}
             ${diff}
+            ${renderVariantsTable({ title: 'Gastronom variants', variants: m.raw?.variants || [], kind: 'gastronom', limit: 6 })}
           </div>
         `;
         })
@@ -409,6 +557,78 @@
     function shopifyNumericProductId(gid) {
       const m = String(gid || '').match(/Product\/(\d+)/);
       return m ? m[1] : String(gid || '');
+    }
+
+    function normalizeQtySupplier(v) {
+      const out = Boolean(v?.out_of_stock) || v?.available === false;
+      if (out) return { label: 'out of stock', cls: 'bad' };
+      if (v?.unlimited_stock) return { label: 'unlimited', cls: 'ok' };
+      const q = v?.qty;
+      if (q != null && String(q).trim() !== '') return { label: `limited (${q})`, cls: 'warn' };
+      if (v?.limited_stock) return { label: 'limited', cls: 'warn' };
+      return { label: '—', cls: '' };
+    }
+
+    function normalizeQtyGastronom(v) {
+      const raw = v?.stock;
+      if (raw == null || String(raw).trim() === '') return { label: 'unlimited', cls: 'ok' };
+      const n = Number(String(raw).replace(/[^0-9\\-]+/g, ''));
+      if (!Number.isFinite(n)) return { label: 'unlimited', cls: 'ok' };
+      if (n <= 0) return { label: 'out of stock', cls: 'bad' };
+      return { label: `limited (${n})`, cls: 'warn' };
+    }
+
+    function renderVariantsTable(opts) {
+      const { title, variants, kind, limit } = opts || {};
+      const arr = Array.isArray(variants) ? variants : [];
+      if (arr.length === 0) return '';
+      const rows = arr.slice(0, Math.max(1, limit || arr.length));
+      const more =
+        arr.length > rows.length
+          ? `<div class="meta" style="margin-top:6px;">+${arr.length - rows.length} more variant(s)</div>`
+          : '';
+      const toQty = kind === 'supplier' ? normalizeQtySupplier : normalizeQtyGastronom;
+      const priceFmt =
+        kind === 'supplier'
+          ? (v) =>
+              v?.promotional_price != null
+                ? String(v.promotional_price)
+                : v?.regular_price != null
+                  ? String(v.regular_price)
+                  : '—'
+          : (v) => (v?.price != null ? `${String(v.price)} AED` : '—');
+      const weightFmt =
+        kind === 'supplier'
+          ? (v) => (v?.weight != null && String(v.weight).trim() !== '' ? `${String(v.weight)} g` : '—')
+          : (v) => (v?.weight != null && String(v.weight).trim() !== '' ? String(v.weight) : '—');
+
+      return `
+        <div class="variants">
+          <div class="vtitle">${escapeHtml(title || 'Variants')}</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Weight</th>
+                <th>Price</th>
+                <th>Qty</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows
+                .map((v) => {
+                  const q = toQty(v);
+                  return `<tr>
+                    <td>${escapeHtml(weightFmt(v))}</td>
+                    <td>${escapeHtml(priceFmt(v))}</td>
+                    <td><span class="qty-pill ${escapeAttr(q.cls)}">${escapeHtml(q.label)}</span></td>
+                  </tr>`;
+                })
+                .join('')}
+            </tbody>
+          </table>
+          ${more}
+        </div>
+      `;
     }
 
     function selectMatch(el) {
@@ -435,6 +655,7 @@
         const raw = await res.text();
         if (!res.ok) {
           bar.innerHTML = `<span class="status-badge st-none">Report failed (${res.status}). Is the review server running? Open <code>http://localhost:${REVIEW_PORT}</code> from the same machine. ${escapeHtml(raw.slice(0, 280))}</span>`;
+          rowsAll = [];
           rows = [];
           return;
         }
@@ -443,10 +664,11 @@
           data = JSON.parse(raw);
         } catch (parseErr) {
           bar.innerHTML = `<span class="status-badge st-none">Bad JSON from /api/report. ${escapeHtml(String(parseErr.message))}</span>`;
+          rowsAll = [];
           rows = [];
           return;
         }
-        rows = data.rows || [];
+        rowsAll = data.rows || [];
         const mapWarn = document.getElementById('mapping-warn');
         const audit = data.mappingAudit;
         if (audit && audit.warning_all_same_gid) {
@@ -469,17 +691,20 @@
           mapWarn.style.display = 'none';
           mapWarn.innerHTML = '';
         }
-        const max = Math.max(0, rows.length - 1);
+
+        // keep index stable relative to previous filtered list
+        const maxAll = Math.max(0, rowsAll.length - 1);
         if (reset) {
           idx = 0;
         } else if (advance) {
-          idx = Math.min(prevIdx + 1, max);
+          idx = Math.min(prevIdx + 1, maxAll);
         } else {
-          idx = Math.min(prevIdx, max);
+          idx = Math.min(prevIdx, maxAll);
         }
-        render();
+        setFilter(filterMode);
       } catch (e) {
         bar.innerHTML = `<span class="status-badge st-none">Cannot reach API at ${escapeHtml(API || '(same origin)')}/api/report — ${escapeHtml(String(e.message))}. Run <code>npm run review</code> in the project folder.</span>`;
+        rowsAll = [];
         rows = [];
       }
     }

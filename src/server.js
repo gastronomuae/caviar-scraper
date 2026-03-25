@@ -22,6 +22,65 @@ function countKeyedRows(list) {
   return list.map(productKey).filter(Boolean).length;
 }
 
+function normalizeIncomingVariants(p) {
+  if (!p || typeof p !== 'object') return undefined;
+  // Make.com sometimes sends `Variants` (capital V) as a nested array-of-arrays
+  const raw = p.variants ?? p.Variants;
+  if (raw == null) return undefined;
+
+  /** @type {any[]} */
+  const flat = [];
+  if (Array.isArray(raw)) {
+    for (const x of raw) {
+      if (Array.isArray(x)) flat.push(...x);
+      else flat.push(x);
+    }
+  } else {
+    flat.push(raw);
+  }
+
+  const out = [];
+  for (const v of flat) {
+    if (!v || typeof v !== 'object') continue;
+    const shopify_variant_id = v.shopify_variant_id || v.shopifyVariantId || v.id || null;
+    // Prefer explicit weight; otherwise parse from title like "360 г."
+    const weight =
+      v.weight != null
+        ? String(v.weight)
+        : v.title != null
+          ? String(v.title)
+          : null;
+    const price = v.price != null ? String(v.price) : null;
+    const stock =
+      v.stock != null
+        ? String(v.stock)
+        : v.inventoryQuantity != null
+          ? String(v.inventoryQuantity)
+          : null;
+    if (!shopify_variant_id && !weight && !price && stock == null) continue;
+    out.push({
+      price,
+      stock,
+      weight,
+      shopify_variant_id,
+      sku: v.sku ?? null,
+      barcode: v.barcode ?? null
+    });
+  }
+  return out;
+}
+
+function normalizeIncomingProduct(p) {
+  if (!p || typeof p !== 'object') return p;
+  const variants = normalizeIncomingVariants(p);
+  // Keep all original fields, but ensure our canonical lowercase `variants` exists when present.
+  const out = { ...p };
+  if (variants !== undefined) out.variants = variants;
+  // Avoid persisting the nested Make-only key unless someone wants it for debugging.
+  if (out.Variants !== undefined) delete out.Variants;
+  return out;
+}
+
 function shrinkWouldBeSuspicious(prevKeyed, nextKeyed) {
   if (PROTECT_MIN_EXISTING <= 0) return false;
   if (prevKeyed < PROTECT_MIN_EXISTING) return false;
@@ -69,11 +128,66 @@ function mergeIncomingFullSnapshot(incomingList) {
   return order.map((k) => map.get(k));
 }
 
+/**
+ * Delta sync: upsert incoming keys into existing list, keep everything else.
+ * - Same key → replace row (price/status/etc.)
+ * - New key → append to end
+ * - No deletions
+ */
+function mergeIncomingDelta(existingList, incomingList) {
+  const incomingMap = new Map();
+  const incomingOrder = [];
+  for (const p of incomingList) {
+    const k = productKey(p);
+    if (!k) continue;
+    if (!incomingMap.has(k)) incomingOrder.push(k);
+    incomingMap.set(k, p); // last row wins if duplicated
+  }
+
+  const out = [];
+  const used = new Set();
+  for (const prev of existingList) {
+    const k = productKey(prev);
+    if (k && incomingMap.has(k)) {
+      const inc = incomingMap.get(k);
+      // Delta payloads may omit fields; merge to avoid wiping existing data.
+      const merged = { ...(prev || {}), ...(inc || {}) };
+      // Preserve variants unless explicitly provided in the incoming payload.
+      if (!('variants' in (inc || {})) || !Array.isArray(inc?.variants)) {
+        if (prev && 'variants' in prev) merged.variants = prev.variants;
+      }
+      // Preserve image fields unless explicitly provided.
+      if (!('Image url' in (inc || {})) && prev && 'Image url' in prev) merged['Image url'] = prev['Image url'];
+      if (!('image' in (inc || {})) && prev && 'image' in prev) merged.image = prev.image;
+      out.push(merged);
+      used.add(k);
+    } else {
+      out.push(prev);
+    }
+  }
+  for (const k of incomingOrder) {
+    if (used.has(k)) continue;
+    out.push(incomingMap.get(k));
+  }
+  return out;
+}
+
 function ingestGastronomPayload(req, res) {
-  console.log('📦 Incoming Gastronom webhook (full-catalog upsert)');
+  console.log('📦 Incoming Gastronom webhook');
 
   const data = req.body;
-  const incoming = Array.isArray(data) ? data : [data];
+  const isArrayPayload = Array.isArray(data);
+  const requestedMode = String(req.query?.mode || '').trim().toLowerCase();
+  /**
+   * Default behavior: DELTA UPSERT ALWAYS.
+   * - Whatever Make sends (1 product or an array) → upsert into existing file
+   * - Never delete existing rows
+   *
+   * Opt-in snapshot (deletes missing keys) only if mode=snapshot is passed.
+   */
+  const mode = requestedMode === 'snapshot' ? 'snapshot' : 'delta';
+  const incomingRaw = isArrayPayload ? data : [data];
+  const incoming = incomingRaw.map(normalizeIncomingProduct);
 
   const payloadStr = JSON.stringify(data);
   if (process.env.DEBUG_GASTRONOM_PAYLOAD === '1' || payloadStr.length <= 8000) {
@@ -95,13 +209,24 @@ function ingestGastronomPayload(req, res) {
     }
   }
 
-  const merged = mergeIncomingFullSnapshot(incoming);
+  // Reject payloads where no keyed rows exist at all (prevents writing junk)
+  const incomingKeyed = incoming.map(productKey).filter(Boolean).length;
+  if (incomingKeyed === 0) {
+    return res.status(400).json({
+      status: 'rejected',
+      error: 'missing_keys',
+      message: 'Incoming payload contained no rows with shopify_product_id or handle.'
+    });
+  }
+
+  const merged =
+    mode === 'snapshot' ? mergeIncomingFullSnapshot(incoming) : mergeIncomingDelta(existing, incoming);
   const prevKeyed = countKeyedRows(existing);
   const nextKeyed = countKeyedRows(merged);
   const prevKeys = new Set(existing.map(productKey).filter(Boolean));
   const nextKeys = new Set(merged.map(productKey).filter(Boolean));
 
-  if (shrinkWouldBeSuspicious(prevKeyed, nextKeyed) && !forceReplace(req)) {
+  if (mode === 'snapshot' && shrinkWouldBeSuspicious(prevKeyed, nextKeyed) && !forceReplace(req)) {
     const minRequired = Math.max(2, Math.ceil(prevKeyed * SHRINK_MIN_FRACTION));
     console.warn(
       `⛔ Rejected sync: would shrink keyed rows ${prevKeyed} → ${nextKeyed} (need ≥${minRequired} or ?force=1 / header x-gastronom-force-replace: 1)`
@@ -139,11 +264,12 @@ function ingestGastronomPayload(req, res) {
   fs.writeFileSync(filePath, JSON.stringify(merged, null, 2));
 
   console.log(
-    `💾 Saved to Output/from_gastronom.json — total: ${merged.length} (added: ${added}, updated: ${updated}, removed from file: ${removed})`
+    `💾 Saved to Output/from_gastronom.json — mode: ${mode} — total: ${merged.length} (added: ${added}, updated: ${updated}, removed from file: ${removed})`
   );
 
   res.json({
     status: 'ok',
+    mode,
     received: incoming.length,
     total: merged.length,
     added,

@@ -4,6 +4,7 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const PATHS = {
   supplier: path.join(ROOT, 'Output/products_all.json'),
+  supplierLatest: path.join(ROOT, 'Output/products_all.latest.json'),
   shopifyPrimary: path.join(ROOT, 'Output/from_gastronom.json'),
   shopifyFallback: path.join(ROOT, 'Output/shopify_from_gastronom.json'),
   mapping: path.join(ROOT, 'Output/product_mapping.json'),
@@ -110,6 +111,7 @@ function normalizeShopifyList(raw) {
   return arr.map((p) => {
     const v = (p.variants && p.variants[0]) || {};
     const id = p.shopify_product_id || p.id || null;
+    const status = String((p && p['Product Status']) || '').trim() || '—';
     return {
       handle: p.handle || '',
       shopify_product_id: id,
@@ -118,6 +120,7 @@ function normalizeShopifyList(raw) {
       price: parseShopifyPrice(v.price != null ? v.price : p.price),
       weight: parseShopifyWeight(v.weight),
       image: (p['Image url'] || p.image || '').trim() || null,
+      product_status: status,
       raw: p
     };
   });
