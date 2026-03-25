@@ -12,7 +12,8 @@
     "match:csv": "node -e \"require('./src/product-match').writeMatchingReportCsv(); console.log('wrote Output/matching_report.csv')\"",
     "mapping:prune": "node src/prune-product-mapping.js",
     "match:summary": "node src/matching-summary-report.js",
-    "normalize:gastronom": "node src/normalize-from-gastronom.js"
+    "normalize:gastronom": "node src/normalize-from-gastronom.js",
+    "sync:gastronom": "node src/sync-shopify-gastronom.js"
   },
   "keywords": [],
   "author": "",

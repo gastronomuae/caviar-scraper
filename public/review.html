@@ -272,6 +272,18 @@
     .qty-pill.ok { border-color: var(--ok); color: var(--ok); }
     .qty-pill.warn { border-color: var(--warn); color: var(--warn); }
     .qty-pill.bad { border-color: var(--bad); color: var(--bad); }
+    .qty-btn {
+      padding: 4px 8px;
+      font-size: 0.75rem;
+      border-radius: 999px;
+      border: 1px solid #3d4f6f;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .qty-btn:hover { border-color: var(--accent); }
+    .qty-btn:disabled { opacity: 0.55; cursor: not-allowed; }
     .ps-badge {
       display: inline-block;
       padding: 2px 8px;
@@ -321,6 +333,7 @@
         <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
           <button type="button" class="success" onclick="confirmSelected()">✅ Confirm match</button>
           <button type="button" class="danger" onclick="markNoMatch()">❌ No match</button>
+          <button type="button" class="primary" title="Same sync as on each Gastronom card; uses whichever card is selected (green border)." onclick="syncVariantsFromSupplier(this)">↻ Sync selected card → Shopify</button>
           <button type="button" onclick="openSearch()">🔍 Search manually</button>
         </div>
       </div>
@@ -343,6 +356,11 @@
         <button type="button" class="modal-close" onclick="closeUnpaired()">Close</button>
       </div>
       <p class="unpaired-summary" id="unpaired-summary"></p>
+      <div id="unpaired-actions" class="nav-row" style="display: none; margin-bottom: 8px;">
+        <button type="button" class="danger" id="btn-unpaired-draft-all" onclick="draftAllUnpairedActive(this)">
+          Set all ACTIVE unpaired → DRAFT in Shopify
+        </button>
+      </div>
       <div class="unpaired-grid" id="unpaired-grid"></div>
     </div>
   </div>
@@ -389,12 +407,34 @@
     /** Picked from manual search; confirm on main screen */
     let manualPick = null;
     let lastSearchHits = [];
+    let inventoryFlashTimer = null;
+    /** ACTIVE count from last Gastronom-unpaired modal load (for bulk draft confirm). */
+    let lastUnpairedActiveCount = 0;
 
     function badgeClass(st) {
       if (st.includes('confirmed')) return 'st-confirmed';
       if (st.includes('no match')) return 'st-none';
       if (st.includes('auto by handle')) return 'st-handle';
       return 'st-review';
+    }
+
+    function restoreStatusBarFromRow() {
+      const bar = document.getElementById('status-bar');
+      const r = rows[idx];
+      if (!bar || !r) return;
+      bar.innerHTML = `<span class="status-badge ${badgeClass(r.status)}">${escapeHtml(r.status)}</span>`;
+    }
+
+    /** Non-blocking message in the status strip (no alert/confirm). */
+    function showInventoryFlash(message, isError) {
+      const bar = document.getElementById('status-bar');
+      if (!bar) return;
+      bar.innerHTML = `<span class="status-badge ${isError ? 'st-none' : 'st-confirmed'}">${escapeHtml(message)}</span>`;
+      if (inventoryFlashTimer) clearTimeout(inventoryFlashTimer);
+      inventoryFlashTimer = setTimeout(() => {
+        inventoryFlashTimer = null;
+        restoreStatusBarFromRow();
+      }, 5000);
     }
 
     function applyFilter() {
@@ -506,7 +546,14 @@
             <div class="line"><strong>Weight</strong> ${m.weight != null ? escapeHtml(String(m.weight)) + ' g' : '—'}</div>
             ${scoreHtml}
             ${diff}
-            ${renderVariantsTable({ title: 'Gastronom variants', variants: m.raw?.variants || [], kind: 'gastronom', limit: 6 })}
+            ${renderVariantsTable({
+              title: 'Gastronom variants',
+              variants: m.raw?.variants || [],
+              kind: 'gastronom',
+              limit: 6,
+              supplierVariants: s.raw?.variants || []
+            })}
+            ${gastronomCardSyncRowHtml(m.shopify_product_id)}
           </div>
         `);
         selectedShopifyId = m.shopify_product_id || null;
@@ -537,7 +584,14 @@
             <div class="line"><strong>Weight</strong> ${m.weight != null ? escapeHtml(String(m.weight)) + ' g' : '—'}</div>
             ${scoreHtml}
             ${diff}
-            ${renderVariantsTable({ title: 'Gastronom variants', variants: m.raw?.variants || [], kind: 'gastronom', limit: 6 })}
+            ${renderVariantsTable({
+              title: 'Gastronom variants',
+              variants: m.raw?.variants || [],
+              kind: 'gastronom',
+              limit: 6,
+              supplierVariants: s.raw?.variants || []
+            })}
+            ${gastronomCardSyncRowHtml(m.shopify_product_id)}
           </div>
         `;
         })
@@ -571,15 +625,216 @@
 
     function normalizeQtyGastronom(v) {
       const raw = v?.stock;
-      if (raw == null || String(raw).trim() === '') return { label: 'unlimited', cls: 'ok' };
+      const policy = String(v?.inventory_policy || v?.inventoryPolicy || '').trim().toUpperCase();
+      const unlimited = policy === 'CONTINUE';
+      if (raw == null || String(raw).trim() === '') {
+        return { label: '—', cls: '', unlimited };
+      }
       const n = Number(String(raw).replace(/[^0-9\\-]+/g, ''));
-      if (!Number.isFinite(n)) return { label: 'unlimited', cls: 'ok' };
-      if (n <= 0) return { label: 'out of stock', cls: 'bad' };
-      return { label: `limited (${n})`, cls: 'warn' };
+      if (!Number.isFinite(n)) return { label: String(raw), cls: '', unlimited };
+      const cls = n <= 0 ? 'bad' : 'warn';
+      return { label: String(n), cls, unlimited };
+    }
+
+    function weightGrams(v) {
+      const w = v?.weight != null ? v.weight : v?.title;
+      const m = String(w == null ? '' : w).match(/(-?\d+)/);
+      if (!m) return null;
+      const n = Number(m[1]);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function supplierQtyNumber(v) {
+      const out = Boolean(v?.out_of_stock) || v?.available === false;
+      if (out) return 0;
+      if (v?.unlimited_stock) return null;
+      const q = v?.qty;
+      if (q == null || String(q).trim() === '') return null;
+      const n = Number(String(q).replace(/[^0-9\\-]+/g, ''));
+      if (!Number.isFinite(n)) return null;
+      return Number.isInteger(n) ? n : Math.trunc(n);
+    }
+
+    async function setVariantQtyInShopify(variantGid, qty, btn) {
+      if (!variantGid) return;
+      const prevText = btn ? btn.textContent : '';
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Updating…';
+        }
+        const res = await fetch(API + '/api/inventory/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ variant_id: variantGid, quantity: qty })
+        });
+        const text = await res.text();
+        if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+        let j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (_) {
+          // ignore
+        }
+        if (!j?.ok) throw new Error(j?.error || text || 'Failed');
+        await load();
+      } catch (e) {
+        showInventoryFlash(`Inventory: ${String(e.message || e)}`, true);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = prevText || 'Set qty';
+        }
+      }
+    }
+
+    async function setVariantUnlimitedInShopify(variantGid, btn) {
+      if (!variantGid) return;
+      const prevText = btn ? btn.textContent : '';
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Updating…';
+        }
+        const res = await fetch(API + '/api/inventory/policy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ variant_id: variantGid, inventory_policy: 'CONTINUE' })
+        });
+        const text = await res.text();
+        if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+        let j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (_) {
+          // ignore
+        }
+        if (!j?.ok) throw new Error(j?.error || text || 'Failed');
+        await load();
+      } catch (e) {
+        showInventoryFlash(`Policy update: ${String(e.message || e)}`, true);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = prevText || 'Set unlimited';
+        }
+      }
+    }
+
+    function gastronomCardSyncRowHtml(shopifyProductGid) {
+      const g = String(shopifyProductGid || '').trim();
+      if (!g) return '';
+      return `<div class="card-sync-row" style="margin-top:12px;">
+    <button type="button" class="primary" style="font-size:0.85rem;padding:6px 12px;" title="Align this product&#39;s variants with the supplier row on the left (Shopify Admin)." onclick="event.stopPropagation(); syncVariantsFromSupplierForProduct('${escapeAttr(g)}', this)">↻ Sync variants → Shopify</button>
+  </div>`;
+    }
+
+    /** Patch current report row in memory from live Shopify (no full report reload, no from_gastronom.json write). */
+    async function refreshGastronomRowFromShopify(shopifyProductGid) {
+      const gid = String(shopifyProductGid || '').trim();
+      const res = await fetch(
+        API + '/api/gastronom-product-live?shopify_product_id=' + encodeURIComponent(gid)
+      );
+      const text = await res.text();
+      let j = null;
+      try {
+        j = JSON.parse(text);
+      } catch (_) {
+        // ignore
+      }
+      if (!res.ok || !j?.ok || !j.row) throw new Error(j?.error || text || 'Live refresh failed');
+      const newRow = j.row;
+      const cur = rows[idx];
+      if (!cur) return;
+      for (let i = 0; i < cur.suggestions.length; i++) {
+        const s = cur.suggestions[i];
+        if (s && s.shopify_product_id === gid) {
+          cur.suggestions[i] = {
+            ...newRow,
+            score: s.score,
+            reason: s.reason
+          };
+          break;
+        }
+      }
+      if (manualPick && manualPick.shopify_product_id === gid) {
+        manualPick = {
+          ...newRow,
+          score: manualPick.score,
+          reason: manualPick.reason
+        };
+      }
+    }
+
+    /**
+     * Full supplier → Shopify alignment (prices, policies, qty, add missing weights, orphans → 0 / DENY).
+     * Uses staged Output/products_all.json for the current supplier row.
+     */
+    async function syncVariantsFromSupplierForProduct(shopifyProductGid, btn) {
+      const r = rows[idx];
+      const gid = String(shopifyProductGid || '').trim();
+      if (!r || !gid) {
+        showInventoryFlash('Pick a supplier row and a Gastronom product (with GID).', true);
+        return;
+      }
+      const defaultLabel = '↻ Sync variants → Shopify';
+      const prevText = btn ? btn.textContent : defaultLabel;
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Syncing…';
+        }
+        const res = await fetch(API + '/api/variants/sync-from-supplier', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source_handle: r.supplier.handle,
+            shopify_product_id: gid
+          })
+        });
+        const text = await res.text();
+        let j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (_) {
+          // ignore
+        }
+        if (!res.ok || !j?.ok) throw new Error(j?.error || text || 'Failed');
+        const a = j.applied || {};
+        showInventoryFlash(
+          `Shopify updated: ${a.bulk_update_rows ?? 0} variant row(s), ${a.inventory_rows ?? 0} inventory row(s), ${a.option_values_added ?? 0} new option value(s). Card refreshed from live Shopify.`,
+          false
+        );
+        try {
+          await refreshGastronomRowFromShopify(gid);
+          render();
+        } catch (re) {
+          showInventoryFlash(
+            `Synced OK; card refresh failed: ${String(re.message || re)}. Run npm run sync:gastronom or reload the page.`,
+            true
+          );
+          await load();
+        }
+      } catch (e) {
+        showInventoryFlash(`Variant sync: ${String(e.message || e)}`, true);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = prevText || defaultLabel;
+        }
+      }
+    }
+
+    async function syncVariantsFromSupplier(btn) {
+      if (!selectedShopifyId) {
+        showInventoryFlash('Select a Gastronom card first, or use the sync button on that card.', true);
+        return;
+      }
+      await syncVariantsFromSupplierForProduct(selectedShopifyId, btn);
     }
 
     function renderVariantsTable(opts) {
-      const { title, variants, kind, limit } = opts || {};
+      const { title, variants, kind, limit, supplierVariants } = opts || {};
       const arr = Array.isArray(variants) ? variants : [];
       if (arr.length === 0) return '';
       const rows = arr.slice(0, Math.max(1, limit || arr.length));
@@ -611,16 +866,50 @@
                 <th>Weight</th>
                 <th>Price</th>
                 <th>Qty</th>
+                ${kind === 'gastronom' ? '<th></th>' : ''}
               </tr>
             </thead>
             <tbody>
               ${rows
                 .map((v) => {
                   const q = toQty(v);
+                  const qtyHtml =
+                    kind === 'gastronom'
+                      ? `<span class="qty-pill ${escapeAttr(q.cls)}">${escapeHtml(q.label)}</span>` +
+                        (q.unlimited ? ` <span class="qty-pill ok">Unlimited</span>` : '')
+                      : `<span class="qty-pill ${escapeAttr(q.cls)}">${escapeHtml(q.label)}</span>`;
+                  let actionTd = '';
+                  if (kind === 'gastronom') {
+                    const vg = v?.shopify_variant_id || v?.id || null;
+                    const supArr = Array.isArray(supplierVariants) ? supplierVariants : [];
+                    const gw = weightGrams(v);
+                    const match = gw == null ? null : supArr.find((sv) => weightGrams(sv) === gw) || null;
+                    const supQty = match ? supplierQtyNumber(match) : null;
+                    const supUnlimited = Boolean(match?.unlimited_stock);
+                    const gUnlimited = q.unlimited;
+                    const btns = [];
+                    if (vg && match) {
+                      if (supQty != null && supQty >= 0) {
+                        btns.push(
+                          `<button class="qty-btn" type="button" onclick="setVariantQtyInShopify('${escapeAttr(
+                            String(vg)
+                          )}', ${supQty}, this)">Set = ${supQty}</button>`
+                        );
+                      } else if (supUnlimited && !gUnlimited) {
+                        btns.push(
+                          `<button class="qty-btn" type="button" onclick="setVariantUnlimitedInShopify('${escapeAttr(
+                            String(vg)
+                          )}', this)">Set unlimited</button>`
+                        );
+                      }
+                    }
+                    actionTd = `<td class="meta" style="white-space:normal;">${btns.join(' ')}</td>`;
+                  }
                   return `<tr>
                     <td>${escapeHtml(weightFmt(v))}</td>
                     <td>${escapeHtml(priceFmt(v))}</td>
-                    <td><span class="qty-pill ${escapeAttr(q.cls)}">${escapeHtml(q.label)}</span></td>
+                    <td>${qtyHtml}</td>
+                    ${kind === 'gastronom' ? actionTd : ''}
                   </tr>`;
                 })
                 .join('')}
@@ -770,9 +1059,53 @@
       return 2;
     }
 
+    async function draftAllUnpairedActive(btn) {
+      if (lastUnpairedActiveCount <= 0) return;
+      const ok = confirm(
+        `Set ${lastUnpairedActiveCount} ACTIVE unpaired Gastronom product(s) to DRAFT in Shopify? They will stop selling on channels until set back to ACTIVE.`
+      );
+      if (!ok) return;
+      const prev = btn ? btn.textContent : '';
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Drafting…';
+        }
+        const res = await fetch(API + '/api/unpaired-gastronom/draft-active', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        const text = await res.text();
+        let j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (_) {
+          // ignore
+        }
+        if (!res.ok || !j?.ok) throw new Error(j?.error || text || 'Failed');
+        document.getElementById('unpaired-modal').classList.remove('open');
+        showInventoryFlash(
+          `Shopify: drafted ${j.drafted ?? 0} product(s).${(j.failed || []).length ? ` Failed: ${j.failed.length}.` : ''} Run sync:gastronom to refresh JSON.`,
+          Boolean(j.failed && j.failed.length)
+        );
+        await load();
+      } catch (e) {
+        showInventoryFlash(`Bulk draft: ${String(e.message || e)}`, true);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = prev || 'Set all ACTIVE unpaired → DRAFT in Shopify';
+        }
+      }
+    }
+
     async function showUnpairedGastronom() {
       const box = document.getElementById('unpaired-grid');
       const sum = document.getElementById('unpaired-summary');
+      const actions = document.getElementById('unpaired-actions');
+      lastUnpairedActiveCount = 0;
+      if (actions) actions.style.display = 'none';
       box.innerHTML = '<p class="meta">Loading…</p>';
       sum.textContent = '';
       document.getElementById('unpaired-modal').classList.add('open');
@@ -797,6 +1130,8 @@
           (data.unpaired_gastronom_scope !== 'full_products_all'
             ? '<span style="font-size:0.8rem;">Tip: use env <code>UNPAIRED_GASTRONOM_FULL_SUPPLIER=1</code> to compare against all supplier URLs (legacy).</span>'
             : '');
+        lastUnpairedActiveCount = Number(data.active) || 0;
+        if (actions) actions.style.display = lastUnpairedActiveCount > 0 ? 'flex' : 'none';
         const list = [...(data.products || [])].sort((a, b) => {
           const d = unpairedStatusOrder(a.status) - unpairedStatusOrder(b.status);
           if (d !== 0) return d;

@@ -9,7 +9,7 @@
 ## 1. Business problem
 
 1. **Source of truth A:** Live supplier catalog from **Shopify Storefront JSON** on `1-caviar.ae`, optionally restricted to specific **collections** (e.g. caviar + seafood).
-2. **Source of truth B:** **Gastronom** product export (JSON array), produced elsewhere (e.g. automation) and saved as `Output/from_gastronom.json` or synced via **HTTP webhook**.
+2. **Source of truth B:** **Gastronom** product catalog (Shopify-based JSON array). It is produced by **direct Shopify sync** (`npm run sync:gastronom`) and saved to `Output/from_gastronom.json`.
 3. **Gap:** Handles and titles differ (EN supplier vs RU/other target fields). Operators need **suggested matches**, **confirmation**, and **reports** without blindly overwriting production systems.
 
 This repo **does not** call Shopify Admin GraphQL for writes in the review flow; it persists local JSON mapping files for downstream processes.
@@ -30,7 +30,7 @@ This repo **does not** call Shopify Admin GraphQL for writes in the review flow;
 └────────────────────────────┬────────────────────────────────────┘
                              │
 ┌────────────────────────────┴────────────────────────────────────┐
-│  Output/from_gastronom.json  ← webhook OR manual save         │
+│  Output/from_gastronom.json  ← direct Shopify sync            │
 │  (Gastronom / Shopify-shaped product array)                    │
 └────────────────────────────┬────────────────────────────────────┘
                              │
@@ -53,14 +53,7 @@ This repo **does not** call Shopify Admin GraphQL for writes in the review flow;
 └──────────────────────────┘
 ```
 
-**Secondary HTTP service:** `server.js` on port **3000** accepts Gastronom payloads from Make (or similar).
-
-- **Default (delta upsert)**: regardless of whether Make sends **one product** or an **array**, the server **upserts only the products in the payload** and keeps all other rows unchanged (**no deletions**).
-- **Optional snapshot**: `POST /gastronom?mode=snapshot` treats the payload array as the **full catalog** and removes keys not present in that batch.
-
-**`Output/product_mapping.json` is not modified** — supplier↔GID confirmations stay intact.
-
-**Safety (snapshot only):** if the saved file already has ≥`GASTRONOM_SYNC_PROTECT_MIN_EXISTING` keyed rows (default **5**) and the new batch would **shrink** keyed rows below **max(2, ceil(existing × GASTRONOM_SYNC_SHRINK_MIN_FRACTION))** (default fraction **0.2**), the write is **rejected** with HTTP **409** (avoids Make sending one row and wiping the catalog). Override with **`?force=1`** or header **`x-gastronom-force-replace: 1`**. Before each successful write, the previous file is copied to **`Output/from_gastronom.json.bak`** (name overridable via `GASTRONOM_BACKUP_NAME`). Validate auth at a reverse proxy in production.
+**Direct Shopify sync:** `npm run sync:gastronom` fetches the Shopify Admin API catalog (default vendor filter `Caviar N1`) and overwrites `Output/from_gastronom.json`. It also writes a backup (`Output/from_gastronom.json.bak`) and a delta summary (`Output/shopify_sync_delta.json`).
 
 ---
 
@@ -73,7 +66,7 @@ This repo **does not** call Shopify Admin GraphQL for writes in the review flow;
 | `src/product-match.js` | **Single core library:** paths (`PATHS`), load/save mapping & state, filter, normalize, scoring, report rows, unpaired helpers, CSV writer. |
 | `src/review-server.js` | Express app: `/api/report`, `/api/unpaired-gastronom`, … (see §6), serves `public/review.html`. Handles **EADDRINUSE** with a clear message. |
 | `public/review.html` | Client UI: navigate supplier scope, suggestions, confirm/no-match/manual search, modals for unpaired Gastronom/supplier. Uses `API` base when not served from `:3001`. |
-| `src/server.js` | Webhook: `POST /gastronom` (and legacy `/shopify`) → **full-catalog upsert** into `Output/from_gastronom.json` (see §2 diagram). |
+| `src/sync-shopify-gastronom.js` | Direct Shopify Admin API sync: fetch all products for a vendor (default `Caviar N1`) and write `Output/from_gastronom.json` + `Output/shopify_sync_delta.json`. |
 | `src/normalize-from-gastronom.js` | Reads `from_gastronom.json`, writes `from_gastronom.normalized.json` (flattened numeric fields). |
 | `src/matching-summary-report.js` | Prints and writes `Output/matching_summary_report.txt`. |
 | `src/prune-product-mapping.js` | Drops `product_mapping.json` keys whose handles no longer exist in `products_all.json`. |
@@ -160,7 +153,7 @@ Env: `REVIEW_PORT` (default `3001`), `PRODUCT_MATCH_BROAD` (`0` strict, `1` broa
 
 ## 7. Environment & Windows notes
 
-- Paths use **`Output/`** (capital O) for core data; legacy duplicate **`output/`** may exist on case-insensitive filesystems — prefer **`Output/`** in code and webhooks.
+- Paths use **`Output/`** (capital O) for core data; legacy duplicate **`output/`** may exist on case-insensitive filesystems — prefer **`Output/`** in code.
 - **Port conflicts:** If `npm run review` exits with code `1`, check `EADDRINUSE` message; stop the old PID or set `REVIEW_PORT=3002`.
 - **Browser:** Open the app from **`http://localhost:3001`**, not `file://`, so `/api/report` resolves.
 
@@ -176,13 +169,12 @@ To replicate for **supplier X** + **target catalog Y**:
 4. **Filter:** Adjust `filterSupplierCaviarSeafood` or replace with site-specific taxonomy / collection rules.
 5. **Language:** Matching uses RU/EN mix in `name_ru` / `name_en` — tune tokenization or add transliteration if needed.
 6. **Review UI:** Update copy in `review.html` (brand names, help text). `API` base logic already supports localhost on another port pointing at 3001.
-7. **Webhook:** Point automation at `server.js` path and ensure disk path matches `PATHS.shopifyPrimary`.
+7. **Direct sync:** Set env vars and run `npm run sync:gastronom` on a schedule.
 
 ---
 
 ## 9. Security & production considerations
 
-- **Webhook:** `server.js` has **no authentication**; do not expose raw to the internet without API key / IP allowlist / reverse proxy.
 - **Outputs:** JSON files may contain pricing, SKUs, business copy; treat `Output/` as sensitive for git and backups.
 - **Dependencies:** `express`, `axios` — keep patched (`npm audit`).
 
@@ -203,15 +195,13 @@ confirmed_mapping_file: Output/product_mapping.json
 review_state_file: Output/match_review_state.json
 core_logic_module: src/product-match.js
 review_ui_port: 3001
-webhook_ingest_port: 3000
-webhook_paths: [/gastronom, /shopify]
 collection_handles_editable_in: src/fetch-products-all-1caviar.js (COLLECTION_HANDLES)
 broad_seafood_filter_env: PRODUCT_MATCH_BROAD
 strict_filter: PRODUCT_MATCH_BROAD=0
 entrypoints:
   fetch: index.js / npm run fetch:products-all
   review: npm run review
-  webhook: node src/server.js
+  shopify_sync: npm run sync:gastronom
 key_extension_points:
   - COLLECTION_HANDLES and BASE in fetch script
   - PATHS and filterSupplierCaviarSeafood in product-match.js
@@ -229,7 +219,7 @@ non_goals_in_repo:
 Evolution relevant to operators and reviewers:
 
 - Supplier fetch moved from full-store pagination to **configurable collections** (`caviar`, `seafood`) with **dedupe by product id**.
-- **Make.com** naming was unified to **Gastronom**; files renamed (`from_make.json` → `from_gastronom.json`, etc.); API route `unpaired-make` → `unpaired-gastronom`.
+- **Naming:** “Gastronom” is used as the internal name for the target Shopify store. The catalog file is `from_gastronom.json`.
 - **Review UI** gained unpaired overlays (Gastronom-only / supplier-only), sorted by product status, numeric GID display, image links for supplier products, resilient `load()` and port error handling.
 - **Prune** script and **summary** script support housekeeping after catalog changes.
 
@@ -239,4 +229,4 @@ Evolution relevant to operators and reviewers:
 
 ## 12. Contact / ownership
 
-Fill in repo owner, Slack channel, and on-call for **webhook URL** rotation and **Gastronom** export ownership when publishing internally or on GitHub.
+Fill in repo owner, Slack channel, and on-call for **Gastronom sync** ownership when publishing internally or on GitHub.

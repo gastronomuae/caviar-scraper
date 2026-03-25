@@ -1,7 +1,13 @@
 node_modules/
 .env
 .env.*
+!**/.env.example
 *.log
+
+# Local Shopify caches (credentials / tokens)
+Output/shopify_token_cache.json
+Output/shopify_location_cache.json
+*.bak
 .DS_Store
 Thumbs.db
 

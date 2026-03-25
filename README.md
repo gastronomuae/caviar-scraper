@@ -21,19 +21,30 @@ npm install
 | Normalize Gastronom JSON | `npm run normalize:gastronom` |
 | Prune stale `product_mapping.json` keys | `npm run mapping:prune` |
 
-**Ingest webhook**
+---
 
-- **Default (delta upsert)**: POST **one product** or an **array**. The server will **only update/add the products you sent** and keep the rest unchanged (no deletions).
-- **Optional snapshot**: add `?mode=snapshot` to treat the body array as the full catalog (missing keys are removed). Protected by the shrink guard unless you force it.
+## Direct Shopify sync (no Make.com)
 
-`product_mapping.json` is unchanged. **Guards (snapshot only):** rejects suspicious **shrink** (partial Make payload) with **409** unless `?force=1` or header `x-gastronom-force-replace: 1`; backs up previous file to `Output/from_gastronom.json.bak`. See `docs/ARCHITECTURE.md` for env tunables.
+To fetch Gastronom products directly from Shopify Admin API (vendor filter) and write `Output/from_gastronom.json`:
 
 ```bash
-node src/server.js   # listens on port 3000
+npm run sync:gastronom
 ```
 
-- `POST http://localhost:3000/gastronom` — preferred  
-- `POST http://localhost:3000/shopify` — legacy alias, same behavior  
+Required env vars (set in your shell):
+
+- `SHOP` (e.g. `gastronom-ae` or `gastronom-ae.myshopify.com`)
+- `CLIENT_ID`
+- `CLIENT_SECRET`
+
+Optional:
+
+- `API_VERSION` (default `2024-01`)
+- `VENDOR` (default `Caviar N1`)
+
+The sync also writes:
+- `Output/shopify_sync_delta.json` (added/removed/updated summary vs previous file)
+- `Output/from_gastronom.json.bak` (backup before overwrite)
 
 ---
 
@@ -57,7 +68,7 @@ src/
   fetch-products-all-1caviar.js   # Supplier fetch → Output/products_all.json
   product-match.js                 # Core matching, paths, CSV, reports
   review-server.js                 # Review UI API + static server (port 3001)
-  server.js                        # Webhook ingest (port 3000)
+  sync-shopify-gastronom.js        # Shopify Admin API → Output/from_gastronom.json
   normalize-from-gastronom.js      # Flatten Gastronom export
   matching-summary-report.js       # Console + matching_summary_report.txt
   prune-product-mapping.js         # Remove orphan mapping keys

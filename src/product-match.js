@@ -537,6 +537,7 @@ module.exports = {
   loadJson,
   filterSupplierCaviarSeafood,
   normalizeSupplier,
+  normalizeShopifyList,
   loadShopifyNormalized,
   buildMatchingReport,
   writeMatchingReportCsv,

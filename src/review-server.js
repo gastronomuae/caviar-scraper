@@ -6,6 +6,39 @@ if (process.env.PRODUCT_MATCH_BROAD === undefined) {
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+
+// Same credentials as `node scripts/verify-draft-mutation.js`: load scripts/shopify-test/.env
+// when SHOP / CLIENT_* are not already set in the environment (e.g. plain `npm run review`).
+(function loadOptionalShopifyTestEnv() {
+  const envPath = path.join(__dirname, '..', 'scripts', 'shopify-test', '.env');
+  if (!fs.existsSync(envPath)) return;
+  let applied = 0;
+  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
+    let v = m[2].trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))
+      v = v.slice(1, -1);
+    const k = m[1];
+    if (process.env[k] === undefined) {
+      process.env[k] = v;
+      applied++;
+    }
+  }
+  if (applied) {
+    console.log('Loaded env from scripts/shopify-test/.env (only variables that were unset).');
+  }
+})();
+
+const {
+  getAccessToken,
+  getLocationIdByName,
+  setAvailableQuantity,
+  setVariantInventoryPolicy,
+  setProductStatus,
+  graphql: shopifyGraphql
+} = require('./shopify-inventory');
+const { executeVariantSyncFromSupplier } = require('./shopify-variant-sync');
 const {
   buildMatchingReport,
   writeMatchingReportCsv,
@@ -15,16 +48,20 @@ const {
   saveMapping,
   saveState,
   loadShopifyNormalized,
+  normalizeShopifyList,
   getUnpairedGastronomProducts,
   getUnpairedSupplierProducts,
   PATHS
 } = require('./product-match');
+const { normalizeToGastronomFileShape } = require('./sync-shopify-gastronom');
 
 const app = express();
 const PORT = Number(process.env.REVIEW_PORT || 3001);
 const PUBLIC = path.join(__dirname, '../public');
 const SNAP_DIR = path.join(__dirname, '../Output/snapshots/supplier');
 const SUPPLIER_LATEST = PATHS.supplierLatest || path.join(__dirname, '../Output/products_all.latest.json');
+const SHOPIFY_LOCATION_NAME = (process.env.SHOPIFY_LOCATION_NAME || 'Al Quoz Industrial Area 4').trim();
+const SHOPIFY_LOCATION_ID = (process.env.SHOPIFY_LOCATION_ID || '').trim();
 
 app.use(express.json());
 
@@ -120,6 +157,17 @@ function supplierComparable(p) {
       available: x?.available == null ? null : Boolean(x?.available)
     }))
   };
+}
+
+function readSupplierProductByHandle(handle) {
+  const h = String(handle || '').trim();
+  if (!h) return null;
+  const arr = readSupplierFile(PATHS.supplier);
+  for (const p of arr) {
+    const ph = extractHandleFromUrl(p?.url) || p?.handle;
+    if (ph && String(ph).trim() === h) return p;
+  }
+  return null;
 }
 
 function matchStatusForHandle(handle) {
@@ -285,6 +333,40 @@ app.get('/api/unpaired-gastronom', (req, res) => {
   }
 });
 
+/** Set every ACTIVE product in the unpaired-Gastronom list to DRAFT in Shopify (same scope as /api/unpaired-gastronom). */
+app.post('/api/unpaired-gastronom/draft-active', async (req, res) => {
+  try {
+    const { products, active } = getUnpairedGastronomProducts();
+    const targets = (products || []).filter(
+      (p) =>
+        p?.shopify_product_id &&
+        String(p.status || '')
+          .trim()
+          .toUpperCase() === 'ACTIVE'
+    );
+    const drafted = [];
+    const failed = [];
+    for (const p of targets) {
+      try {
+        await setProductStatus(p.shopify_product_id, 'DRAFT');
+        drafted.push({ handle: p.handle, shopify_product_id: p.shopify_product_id });
+      } catch (e) {
+        failed.push({ handle: p.handle, shopify_product_id: p.shopify_product_id, error: String(e.message) });
+      }
+    }
+    res.json({
+      ok: true,
+      eligible_active: targets.length,
+      list_active_count: active,
+      drafted: drafted.length,
+      failed,
+      drafted_handles: drafted.map((x) => x.handle)
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
 app.get('/api/unpaired-supplier', (req, res) => {
   try {
     res.json(getUnpairedSupplierProducts());
@@ -357,6 +439,134 @@ app.post('/api/supplier-publish', (req, res) => {
   }
 });
 
+app.post('/api/inventory/set', async (req, res) => {
+  try {
+    const { variant_id, quantity } = req.body || {};
+    if (!variant_id) return res.status(400).json({ ok: false, error: 'variant_id required' });
+    if (quantity == null || String(quantity).trim() === '') {
+      return res.status(400).json({ ok: false, error: 'quantity required' });
+    }
+    const n = Number(String(quantity).trim());
+    if (!Number.isFinite(n) || !Number.isInteger(n)) {
+      return res.status(400).json({ ok: false, error: 'quantity must be an integer' });
+    }
+    if (n < 0) return res.status(400).json({ ok: false, error: 'quantity must be >= 0' });
+
+    const token = await getAccessToken();
+    const locationId = SHOPIFY_LOCATION_ID || (await getLocationIdByName(token, SHOPIFY_LOCATION_NAME));
+    const vid = String(variant_id).trim();
+    await setVariantInventoryPolicy({ variantId: vid, inventoryPolicy: 'DENY' });
+    const group = await setAvailableQuantity({
+      variantId: vid,
+      locationId,
+      quantity: n
+    });
+    res.json({
+      ok: true,
+      location_name: SHOPIFY_LOCATION_ID ? '(from SHOPIFY_LOCATION_ID)' : SHOPIFY_LOCATION_NAME,
+      location_id: locationId,
+      result: group
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+app.post('/api/inventory/policy', async (req, res) => {
+  try {
+    const { variant_id, inventory_policy } = req.body || {};
+    if (!variant_id) return res.status(400).json({ ok: false, error: 'variant_id required' });
+    const pol = String(inventory_policy || '').toUpperCase();
+    if (pol !== 'CONTINUE' && pol !== 'DENY') {
+      return res.status(400).json({ ok: false, error: 'inventory_policy must be CONTINUE or DENY' });
+    }
+    const pv = await setVariantInventoryPolicy({
+      variantId: String(variant_id).trim(),
+      inventoryPolicy: pol
+    });
+    res.json({ ok: true, productVariant: pv });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+/**
+ * Full variant alignment: prices, policies, qty from staged supplier JSON; add missing weights;
+ * variants not on supplier → qty 0 + DENY. Requires Shopify scopes: write_products, write_inventory.
+ */
+app.post('/api/variants/sync-from-supplier', async (req, res) => {
+  try {
+    const { source_handle, shopify_product_id, dry_run } = req.body || {};
+    if (!source_handle || !shopify_product_id) {
+      return res.status(400).json({ ok: false, error: 'source_handle and shopify_product_id required' });
+    }
+    const supplier = readSupplierProductByHandle(source_handle);
+    if (!supplier) {
+      return res.status(404).json({ ok: false, error: `No supplier row for handle: ${source_handle}` });
+    }
+    const loc = SHOPIFY_LOCATION_ID || SHOPIFY_LOCATION_NAME;
+    const result = await executeVariantSyncFromSupplier(
+      String(shopify_product_id).trim(),
+      supplier,
+      loc,
+      { dryRun: Boolean(dry_run) }
+    );
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+/** One product from Shopify Admin, same shape as a Gastronom suggestion row (for live UI refresh after sync). */
+async function fetchLiveGastronomNormalizedRow(productGid) {
+  const token = await getAccessToken();
+  const data = await shopifyGraphql(
+    token,
+    `query OneProd($id: ID!) {
+      product(id: $id) {
+        id
+        title
+        handle
+        vendor
+        status
+        productType
+        description
+        featuredImage { url }
+        variants(first: 100) {
+          edges {
+            node {
+              id
+              title
+              price
+              sku
+              barcode
+              inventoryQuantity
+              inventoryPolicy
+            }
+          }
+        }
+      }
+    }`,
+    { id: String(productGid).trim() }
+  );
+  const node = data?.product;
+  if (!node) return null;
+  const raw = normalizeToGastronomFileShape(node);
+  return normalizeShopifyList([raw])[0] || null;
+}
+
+app.get('/api/gastronom-product-live', async (req, res) => {
+  try {
+    const gid = String(req.query.shopify_product_id || '').trim();
+    if (!gid) return res.status(400).json({ ok: false, error: 'shopify_product_id query required' });
+    const row = await fetchLiveGastronomNormalizedRow(gid);
+    if (!row) return res.status(404).json({ ok: false, error: 'Product not found in Shopify' });
+    res.json({ ok: true, row });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
 app.use(express.static(PUBLIC));
 
 app.get('/', (req, res) => {
@@ -374,6 +584,7 @@ const server = app.listen(PORT, () => {
   console.log(
     `API: /api/report, /api/unpaired-gastronom, /api/unpaired-supplier, /api/confirm, /api/no-match, /api/search?q=`
   );
+  console.log('Inventory + full variant sync: productVariantsBulkUpdate / productOptionUpdate / variant sync API (restart after editing src/).');
 });
 
 server.on('error', (err) => {

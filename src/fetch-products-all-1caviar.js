@@ -10,6 +10,64 @@ const OUT = path.join(__dirname, '../Output/products_all.latest.json');
 /** Only these Shopify collection handles are fetched (edit to add/remove). Site: /collections/{handle}/products.json */
 const COLLECTION_HANDLES = ['caviar', 'seafood'];
 
+/**
+ * Optional: scrape visible limited stock quantity from product HTML.
+ * Enable by setting env SUPPLIER_HTML_QTY=1.
+ *
+ * This is slower (extra requests per variant), but the public Shopify JSON endpoints
+ * often do not expose inventory_quantity.
+ */
+const HTML_QTY_ENABLED = process.env.SUPPLIER_HTML_QTY === '1';
+const HTML_QTY_CONCURRENCY = Math.max(1, Number(process.env.SUPPLIER_HTML_QTY_CONCURRENCY || '8'));
+
+async function scrapeVariantQtyFromHtml(productHandle, variantId) {
+  if (!HTML_QTY_ENABLED) return null;
+  const url = `${BASE}/products/${productHandle}?variant=${variantId}`;
+  const { data } = await axios.get(url, {
+    timeout: 60000,
+    headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'text/html' },
+    responseType: 'text',
+    transformResponse: (x) => x
+  });
+  const html = String(data || '');
+  // Example snippet:
+  // <div class="product-inventory-notice--text"> ... 12 in stock, ready to ship ...</div>
+  const m = html.match(/(\d+)\s+in\s+stock\b/i);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+async function mapVariantsWithHtmlQty(productHandle, variants) {
+  const out = [];
+  const vArr = Array.isArray(variants) ? variants : [];
+
+  let i = 0;
+  const workers = new Array(Math.min(HTML_QTY_CONCURRENCY, vArr.length)).fill(0).map(async () => {
+    for (;;) {
+      const idx = i++;
+      if (idx >= vArr.length) return;
+      const v = vArr[idx];
+      const base = mapVariant(productHandle, v);
+      if (base.qty == null && base.available === true) {
+        try {
+          const q = await scrapeVariantQtyFromHtml(productHandle, v.id);
+          if (Number.isFinite(q)) {
+            base.qty = q;
+            base.unlimited_stock = false;
+            base.limited_stock = q > 0 && q <= 5;
+            base.out_of_stock = q <= 0;
+          }
+        } catch (_) {
+          // ignore; keep base values
+        }
+      }
+      out[idx] = base;
+    }
+  });
+  await Promise.all(workers);
+  return out.filter(Boolean);
+}
+
 function stripHtml(html) {
   if (!html) return '';
   return String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -59,6 +117,7 @@ function mapVariant(productHandle, variant) {
 }
 
 function mapProduct(product) {
+  // Variants are mapped async if HTML qty scrape enabled.
   const variants = (product.variants || []).map((v) => mapVariant(product.handle, v));
   const firstVariant = variants[0] || null;
   const imageSrc =
@@ -115,7 +174,17 @@ async function fetchRawProducts() {
 
 async function fetchAllProducts() {
   const raw = await fetchRawProducts();
-  return raw.map(mapProduct);
+  if (!HTML_QTY_ENABLED) return raw.map(mapProduct);
+  const out = [];
+  for (const p of raw) {
+    const base = mapProduct(p);
+    base.variants = await mapVariantsWithHtmlQty(p.handle, p.variants || []);
+    const firstVariant = base.variants[0] || null;
+    base.regular_price = firstVariant ? firstVariant.regular_price : null;
+    base.promotional_price = firstVariant ? firstVariant.promotional_price : null;
+    out.push(base);
+  }
+  return out;
 }
 
 async function main() {
