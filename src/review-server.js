@@ -222,6 +222,7 @@ app.use(express.json());
 if (CPANEL_AUTOMATION_UI) {
   const KEY = String(process.env.AUTOMATION_KEY || '').trim();
   let running = false;
+  let deploying = false;
 
   function checkKey(req) {
     const q = String(req.query.key || '').trim();
@@ -326,6 +327,32 @@ if (CPANEL_AUTOMATION_UI) {
     } finally {
       running = false;
     }
+  });
+
+  app.post('/deploy', (req, res) => {
+    const k = checkKey(req);
+    if (!k.ok) return res.status(403).type('text').send(k.reason);
+    if (deploying) return res.status(409).type('text').send('Already deploying');
+    deploying = true;
+    const started = new Date();
+    console.log(`[deploy] start ${started.toISOString()}`);
+    execFile('bash', [path.join(__dirname, '..', 'scripts', 'deploy.sh')], { cwd: path.join(__dirname, '..') }, (err, stdout, stderr) => {
+      const ended = new Date();
+      if (err) {
+        console.error(err);
+        console.log(`[deploy] fail ${ended.toISOString()} elapsed_ms=${ended - started}`);
+        deploying = false;
+        return res.status(500).type('text').send(`Deploy failed\n\n${String(stderr || stdout || err.message || err)}`);
+      }
+      console.log(String(stdout || '').slice(0, 2000));
+      console.log(`[deploy] ok ${ended.toISOString()} elapsed_ms=${ended - started}`);
+      deploying = false;
+      res.type('text').send(
+        [`Deployed`, `Started: ${started.toISOString()}`, `Finished: ${ended.toISOString()}`, '', String(stdout || ''), stderr ? `\n[stderr]\n${stderr}` : ''].join(
+          '\n'
+        )
+      );
+    });
   });
 }
 
