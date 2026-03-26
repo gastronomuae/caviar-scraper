@@ -1326,6 +1326,19 @@
 
     function formatAutomationReport(j) {
       const c = j?.counts || {};
+      const findStep = (name) =>
+        (Array.isArray(j?.steps) ? j.steps : []).find((s) => s && s.step === name) || null;
+      const supplierDelta = findStep('supplier_delta');
+      const syncStep = findStep('variant_sync_mapped_updates');
+      const syncItems = Array.isArray(syncStep?.ok_items) ? syncStep.ok_items : [];
+      const totalVariantRowsUpdated = syncItems.reduce(
+        (sum, it) => sum + Number(it?.applied?.bulk_update_rows || 0),
+        0
+      );
+      const totalInventoryRowsUpdated = syncItems.reduce(
+        (sum, it) => sum + Number(it?.applied?.inventory_rows || 0),
+        0
+      );
       const lines = [];
       lines.push('Automation run');
       lines.push(`Started: ${j.started_at || '—'}`);
@@ -1333,10 +1346,25 @@
       lines.push(`Result: ${j.ok ? 'OK' : 'FAILED'}`);
       lines.push('');
       lines.push('Summary');
-      lines.push(`- Supplier latest products: ${c.supplier_latest_products ?? 0}`);
-      lines.push(`- Supplier delta updated: ${c.supplier_delta_updated ?? 0}`);
-      lines.push(`- Drafted unpaired ACTIVE: ${c.drafted_unpaired_active ?? 0} (failed ${c.drafted_failures ?? 0})`);
-      lines.push(`- Variant sync OK: ${c.variant_sync_ok ?? 0} (failed ${c.variant_sync_failed ?? 0})`);
+      lines.push(`- Supplier catalog now has ${c.supplier_latest_products ?? 0} products in total.`);
+      lines.push(
+        `- Supplier changes vs previous snapshot: ${supplierDelta?.counts?.added ?? 0} added, ${
+          supplierDelta?.counts?.updated ?? 0
+        } updated, ${supplierDelta?.counts?.removed ?? 0} removed.`
+      );
+      lines.push(
+        `- Unpaired Shopify products moved ACTIVE -> DRAFT: ${c.drafted_unpaired_active ?? 0} (failed ${
+          c.drafted_failures ?? 0
+        }).`
+      );
+      lines.push(
+        `- Mapped products synced to Shopify: ${syncStep?.ok_count ?? 0} successful out of ${
+          syncStep?.targets ?? 0
+        } target products (failed ${syncStep?.failed_count ?? 0}, skipped ${syncStep?.skipped_count ?? 0}).`
+      );
+      lines.push(
+        `- Total variant rows updated: ${totalVariantRowsUpdated} price/variant updates and ${totalInventoryRowsUpdated} inventory updates.`
+      );
       const errs = j?.errors || [];
       if (errs && errs.length) {
         lines.push('');

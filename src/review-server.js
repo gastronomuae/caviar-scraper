@@ -129,6 +129,13 @@ function fmt(n) {
 
 function buildAutomationTextLog(run) {
   const lines = [];
+  const findStep = (name) =>
+    (Array.isArray(run?.steps) ? run.steps : []).find((s) => s && s.step === name) || null;
+  const supplierDelta = findStep('supplier_delta');
+  const syncStep = findStep('variant_sync_mapped_updates');
+  const syncItems = Array.isArray(syncStep?.ok_items) ? syncStep.ok_items : [];
+  const totalVariantRowsUpdated = syncItems.reduce((sum, it) => sum + Number(it?.applied?.bulk_update_rows || 0), 0);
+  const totalInventoryRowsUpdated = syncItems.reduce((sum, it) => sum + Number(it?.applied?.inventory_rows || 0), 0);
   lines.push(`Automation run`);
   lines.push(`Started: ${run.started_at || '—'}`);
   lines.push(`Finished: ${run.finished_at || '—'}`);
@@ -137,10 +144,25 @@ function buildAutomationTextLog(run) {
 
   const c = run.counts || {};
   lines.push(`Summary`);
-  lines.push(`- Supplier latest products: ${fmt(c.supplier_latest_products)}`);
-  lines.push(`- Supplier delta updated: ${fmt(c.supplier_delta_updated)}`);
-  lines.push(`- Drafted unpaired ACTIVE: ${fmt(c.drafted_unpaired_active)} (failed ${fmt(c.drafted_failures)})`);
-  lines.push(`- Variant sync OK: ${fmt(c.variant_sync_ok)} (failed ${fmt(c.variant_sync_failed)})`);
+  lines.push(`- Supplier catalog now has ${fmt(c.supplier_latest_products)} products in total.`);
+  lines.push(
+    `- Supplier changes vs previous snapshot: ${fmt(supplierDelta?.counts?.added)} added, ${fmt(
+      supplierDelta?.counts?.updated
+    )} updated, ${fmt(supplierDelta?.counts?.removed)} removed.`
+  );
+  lines.push(
+    `- Unpaired Shopify products moved ACTIVE -> DRAFT: ${fmt(c.drafted_unpaired_active)} (failed ${fmt(c.drafted_failures)}).`
+  );
+  lines.push(
+    `- Mapped products synced to Shopify: ${fmt(syncStep?.ok_count)} successful out of ${fmt(syncStep?.targets)} target products (failed ${fmt(
+      syncStep?.failed_count
+    )}, skipped ${fmt(syncStep?.skipped_count)}).`
+  );
+  lines.push(
+    `- Total variant rows updated: ${fmt(totalVariantRowsUpdated)} price/variant updates and ${fmt(
+      totalInventoryRowsUpdated
+    )} inventory updates.`
+  );
   lines.push('');
 
   const steps = Array.isArray(run.steps) ? run.steps : [];
@@ -509,6 +531,17 @@ function readSupplierProductByHandle(handle) {
   return null;
 }
 
+function readSupplierProductByHandleFromFile(filePath, handle) {
+  const h = String(handle || '').trim();
+  if (!h) return null;
+  const arr = readSupplierFile(filePath);
+  for (const p of arr) {
+    const ph = extractHandleFromUrl(p?.url) || p?.handle;
+    if (ph && String(ph).trim() === h) return p;
+  }
+  return null;
+}
+
 function matchStatusForHandle(handle) {
   const h = String(handle || '').trim();
   if (!h) return '—';
@@ -821,6 +854,46 @@ app.get('/api/search', (req, res) => {
     res.json(hits.slice(0, 30));
   } catch (e) {
     res.status(500).json({ error: String(e.message) });
+  }
+});
+
+/** Quick diagnostics for one supplier handle (helps verify what this server instance is using right now). */
+app.get('/api/debug/handle', (req, res) => {
+  try {
+    const handle = String(req.query.handle || '').trim();
+    if (!handle) {
+      return res.status(400).json({ ok: false, error: 'handle query required' });
+    }
+
+    const supplierStaged = readSupplierProductByHandleFromFile(PATHS.supplier, handle);
+    const supplierLatest = readSupplierProductByHandleFromFile(SUPPLIER_LATEST, handle);
+    const mapping = loadMapping();
+    const mappedGid = mapping[handle] || null;
+    const shopifyRows = loadShopifyNormalized();
+    const byMappedGid = mappedGid ? shopifyRows.find((r) => r.shopify_product_id === mappedGid) || null : null;
+    const bySameHandle = shopifyRows.find((r) => String(r.handle || '').trim() === handle) || null;
+
+    return res.json({
+      ok: true,
+      handle,
+      files: {
+        supplier_staged: PATHS.supplier,
+        supplier_latest: SUPPLIER_LATEST
+      },
+      mapping: {
+        mapped_gid: mappedGid
+      },
+      supplier: {
+        staged: supplierStaged,
+        latest: supplierLatest
+      },
+      shopify: {
+        by_mapped_gid: byMappedGid,
+        by_same_handle: bySameHandle
+      }
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
