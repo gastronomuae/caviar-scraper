@@ -12,13 +12,43 @@ const COLLECTION_HANDLES = ['caviar', 'seafood'];
 
 /**
  * Optional: scrape visible limited stock quantity from product HTML.
- * Enable by setting env SUPPLIER_HTML_QTY=1.
+ * Enabled by default; set SUPPLIER_HTML_QTY=0 to disable.
  *
  * This is slower (extra requests per variant), but the public Shopify JSON endpoints
  * often do not expose inventory_quantity.
  */
-const HTML_QTY_ENABLED = process.env.SUPPLIER_HTML_QTY === '1';
+const HTML_QTY_ENABLED = process.env.SUPPLIER_HTML_QTY !== '0';
 const HTML_QTY_CONCURRENCY = Math.max(1, Number(process.env.SUPPLIER_HTML_QTY_CONCURRENCY || '8'));
+const PRODUCT_JS_QTY_ENABLED = process.env.SUPPLIER_PRODUCT_JS_QTY !== '0';
+
+/** @type {Map<string, Promise<Map<number, number>>>} */
+const productQtyMapCache = new Map();
+
+async function fetchVariantQtyMapFromProductJs(productHandle) {
+  if (!PRODUCT_JS_QTY_ENABLED) return new Map();
+  const key = String(productHandle || '').trim();
+  if (!key) return new Map();
+  if (productQtyMapCache.has(key)) return productQtyMapCache.get(key);
+
+  const p = (async () => {
+    const url = `${BASE}/products/${key}.js`;
+    const { data } = await axios.get(url, {
+      timeout: 60000,
+      headers: { Accept: 'application/json' }
+    });
+    const arr = Array.isArray(data?.variants) ? data.variants : [];
+    const out = new Map();
+    for (const v of arr) {
+      const id = Number(v?.id);
+      const q = Number(v?.inventory_quantity);
+      if (Number.isFinite(id) && Number.isFinite(q)) out.set(id, q);
+    }
+    return out;
+  })().catch(() => new Map());
+
+  productQtyMapCache.set(key, p);
+  return p;
+}
 
 async function scrapeVariantQtyFromHtml(productHandle, variantId) {
   if (!HTML_QTY_ENABLED) return null;
@@ -40,6 +70,7 @@ async function scrapeVariantQtyFromHtml(productHandle, variantId) {
 async function mapVariantsWithHtmlQty(productHandle, variants) {
   const out = [];
   const vArr = Array.isArray(variants) ? variants : [];
+  const productJsQtyMap = await fetchVariantQtyMapFromProductJs(productHandle);
 
   let i = 0;
   const workers = new Array(Math.min(HTML_QTY_CONCURRENCY, vArr.length)).fill(0).map(async () => {
@@ -49,6 +80,17 @@ async function mapVariantsWithHtmlQty(productHandle, variants) {
       const v = vArr[idx];
       const base = mapVariant(productHandle, v);
       if (base.qty == null && base.available === true) {
+        const productJsQty = productJsQtyMap.get(Number(v?.id));
+        if (Number.isFinite(productJsQty)) {
+          const q = Math.max(0, Math.trunc(productJsQty));
+          base.qty = q;
+          base.unlimited_stock = false;
+          base.limited_stock = q > 0 && q <= 5;
+          base.out_of_stock = q <= 0;
+          base.available = q > 0 || v?.inventory_policy === 'continue';
+          out[idx] = base;
+          continue;
+        }
         try {
           const q = await scrapeVariantQtyFromHtml(productHandle, v.id);
           if (Number.isFinite(q)) {
