@@ -58,12 +58,15 @@ const {
   normalizeToGastronomFileShape,
   runSyncGastronomFromShopify
 } = require('./sync-shopify-gastronom');
+const { runDailyAutomation, createFileLock } = require('./automation-runner');
 
 const app = express();
 /** @type {Promise<unknown> | null} */
 let gastronomSyncInFlight = null;
 /** @type {Promise<unknown> | null} */
 let dailyAutomationInFlight = null;
+/** @type {any | null} */
+let dailyAutomationLock = null;
 
 const AUTOMATION_LAST_JSON = path.join(__dirname, '..', 'Output', 'automation_last_run.json');
 const AUTOMATION_LAST_TXT = path.join(__dirname, '..', 'Output', 'automation_last_run.txt');
@@ -424,180 +427,42 @@ app.post('/api/automation/run', async (req, res) => {
     return res.status(409).json({ ok: false, error: 'Automation already running; wait for it to finish.' });
   }
 
-  dailyAutomationInFlight = (async () => {
-    const started_at = new Date().toISOString();
-    const result = {
-      ok: true,
-      started_at,
-      steps: /** @type {any[]} */ ([]),
-      warnings: /** @type {string[]} */ ([]),
-      errors: /** @type {string[]} */ ([]),
-      counts: {
-        supplier_latest_products: 0,
-        supplier_delta_updated: 0,
-        drafted_unpaired_active: 0,
-        drafted_failures: 0,
-        variant_sync_ok: 0,
-        variant_sync_failed: 0
+  // Cross-process lock (Passenger can have multiple Node instances).
+  try {
+    dailyAutomationLock = createFileLock(path.join(__dirname, '..', 'Output', 'locks', 'automation.lock'));
+  } catch (e) {
+    return res.status(409).json({ ok: false, error: String(e.message || e) });
+  }
+
+  const supplierLatestPath = SUPPLIER_LATEST;
+  const snapshotDir = SNAP_DIR;
+  const loc = SHOPIFY_LOCATION_ID || SHOPIFY_LOCATION_NAME;
+
+  dailyAutomationInFlight = runDailyAutomation({
+    lockPath: null, // locked by review-server (so we can keep the inFlight in-process semantics too)
+    supplierLatestPath,
+    snapshotDir,
+    shopifyLocationNameOrId: loc
+  })
+    .then((result) => {
+      try {
+        ensureOutputDir();
+        fs.writeFileSync(AUTOMATION_LAST_JSON, JSON.stringify(result, null, 2), 'utf8');
+        fs.writeFileSync(AUTOMATION_LAST_TXT, buildAutomationTextLog(result), 'utf8');
+        result.report_paths = { json: path.basename(AUTOMATION_LAST_JSON), txt: path.basename(AUTOMATION_LAST_TXT) };
+      } catch (e) {
+        result.warnings = result.warnings || [];
+        result.warnings.push(`Could not write automation report files: ${String(e.message || e)}`);
       }
-    };
-
-    // Step 1: Shopify -> Output/from_gastronom.json
-    try {
-      const r = await runSyncGastronomFromShopify();
-      result.steps.push({ step: 'sync_gastronom', ok: true, ...r });
-    } catch (e) {
-      result.ok = false;
-      result.errors.push(`sync_gastronom: ${String(e.message || e)}`);
-      result.steps.push({ step: 'sync_gastronom', ok: false, error: String(e.message || e) });
       return result;
-    }
-
-    // Step 2: supplier scan -> latest, snapshot existing staged, delta, publish latest
-    const stagedBefore = readSupplierFile(PATHS.supplier);
-    try {
-      const rScan = await execNodeScript(path.join(__dirname, 'fetch-products-all-1caviar.js'));
-      result.steps.push({ step: 'supplier_scan', ok: true, note: 'Wrote Output/products_all.latest.json', ...rScan });
-    } catch (e) {
-      result.ok = false;
-      result.errors.push(`supplier_scan: ${String(e.message || e)}`);
-      result.steps.push({ step: 'supplier_scan', ok: false, error: String(e.message || e) });
-      return result;
-    }
-
-    const snap = saveSupplierSnapshot();
-    result.steps.push({ step: 'supplier_snapshot', ok: true, ...snap });
-
-    const latestArr = readSupplierFile(SUPPLIER_LATEST);
-    result.counts.supplier_latest_products = latestArr.length;
-    const delta = diffSupplierSnapshots(Array.isArray(stagedBefore) ? stagedBefore : [], latestArr);
-    result.counts.supplier_delta_updated = delta.updated.length;
-    result.steps.push({
-      step: 'supplier_delta',
-      ok: true,
-      counts: { added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length }
+    })
+    .finally(() => {
+      dailyAutomationInFlight = null;
+      if (dailyAutomationLock) {
+        dailyAutomationLock.release();
+        dailyAutomationLock = null;
+      }
     });
-
-    const pub = publishLatestSupplier();
-    result.steps.push({ step: 'supplier_publish', ok: true, ...pub });
-
-    // Step 3: Draft ACTIVE unpaired Gastronom products
-    try {
-      const { products, active } = getUnpairedGastronomProducts();
-      const targets = (products || []).filter(
-        (p) => p?.shopify_product_id && String(p.status || '').trim().toUpperCase() === 'ACTIVE'
-      );
-      const drafted = [];
-      const failed = [];
-      for (const p of targets) {
-        try {
-          await setProductStatus(p.shopify_product_id, 'DRAFT');
-          drafted.push(p.shopify_product_id);
-        } catch (e) {
-          failed.push({ shopify_product_id: p.shopify_product_id, handle: p.handle, error: String(e.message || e) });
-        }
-      }
-      result.counts.drafted_unpaired_active = drafted.length;
-      result.counts.drafted_failures = failed.length;
-      result.steps.push({
-        step: 'draft_unpaired_active',
-        ok: failed.length === 0,
-        list_active_count: active,
-        eligible_active: targets.length,
-        drafted: drafted.length,
-        failed
-      });
-    } catch (e) {
-      result.ok = false;
-      result.errors.push(`draft_unpaired_active: ${String(e.message || e)}`);
-      result.steps.push({ step: 'draft_unpaired_active', ok: false, error: String(e.message || e) });
-      // continue; we still try variant sync
-    }
-
-    // Step 4: Sync variants for all confirmed mapped products that exist in both supplier + Gastronom export.
-    try {
-      const mapping = loadMapping();
-      const shopify = loadShopifyNormalized();
-      const gastronomGids = new Set(shopify.map((s) => s.shopify_product_id).filter(Boolean));
-      const loc = SHOPIFY_LOCATION_ID || SHOPIFY_LOCATION_NAME;
-
-      /** @type {{ source_handle: string, shopify_product_id: string }[]} */
-      const syncTargets = [];
-      /** @type {{ source_handle: string, shopify_product_id: string, reason: string }[]} */
-      const skipped = [];
-      for (const [hRaw, gidRaw] of Object.entries(mapping || {})) {
-        const h = String(hRaw || '').trim();
-        const gid = String(gidRaw || '').trim();
-        if (!h || !gid) continue;
-        const supplier = readSupplierProductByHandle(h);
-        if (!supplier) {
-          skipped.push({ source_handle: h, shopify_product_id: gid, reason: 'no supplier row for handle (not in products_all.json)' });
-          continue;
-        }
-        if (!gastronomGids.has(gid)) {
-          skipped.push({ source_handle: h, shopify_product_id: gid, reason: 'mapped GID not present in from_gastronom.json (vendor filter?)' });
-          continue;
-        }
-        syncTargets.push({ source_handle: h, shopify_product_id: gid });
-      }
-
-      const ok = /** @type {any[]} */ ([]);
-      const failed = /** @type {any[]} */ ([]);
-      for (const t of syncTargets) {
-        try {
-          const supplier = readSupplierProductByHandle(t.source_handle);
-          if (!supplier) throw new Error(`No supplier row for handle: ${t.source_handle}`);
-          const r = await executeVariantSyncFromSupplier(t.shopify_product_id, supplier, loc, { dryRun: false });
-          ok.push({
-            ...t,
-            supplier_name: supplier?.name ?? '',
-            supplier_url: supplier?.url ?? '',
-            set_active_after_sync: Boolean(r?.set_active_after_sync),
-            applied: r?.applied || null
-          });
-        } catch (e) {
-          failed.push({ ...t, error: String(e.message || e) });
-        }
-      }
-
-      result.counts.variant_sync_ok = ok.length;
-      result.counts.variant_sync_failed = failed.length;
-      result.steps.push({
-        step: 'variant_sync_mapped_updates',
-        ok: failed.length === 0,
-        targets: syncTargets.length,
-        ok_count: ok.length,
-        failed_count: failed.length,
-        ok_items: ok,
-        skipped_count: skipped.length,
-        skipped: skipped,
-        failed
-      });
-    } catch (e) {
-      result.ok = false;
-      result.errors.push(`variant_sync_mapped_updates: ${String(e.message || e)}`);
-      result.steps.push({ step: 'variant_sync_mapped_updates', ok: false, error: String(e.message || e) });
-    }
-
-    result.finished_at = new Date().toISOString();
-
-    // Persist an easy-to-read report for operators.
-    try {
-      ensureOutputDir();
-      fs.writeFileSync(AUTOMATION_LAST_JSON, JSON.stringify(result, null, 2), 'utf8');
-      fs.writeFileSync(AUTOMATION_LAST_TXT, buildAutomationTextLog(result), 'utf8');
-      result.report_paths = {
-        json: path.basename(AUTOMATION_LAST_JSON),
-        txt: path.basename(AUTOMATION_LAST_TXT)
-      };
-    } catch (e) {
-      result.warnings.push(`Could not write automation report files: ${String(e.message || e)}`);
-    }
-
-    return result;
-  })().finally(() => {
-    dailyAutomationInFlight = null;
-  });
 
   try {
     const out = await dailyAutomationInFlight;
