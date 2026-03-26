@@ -100,6 +100,7 @@ let gastronomSyncInFlight = null;
 let dailyAutomationInFlight = null;
 /** @type {any | null} */
 let dailyAutomationLock = null;
+let deployInFlight = false;
 
 const AUTOMATION_LAST_JSON = path.join(__dirname, '..', 'Output', 'automation_last_run.json');
 const AUTOMATION_LAST_TXT = path.join(__dirname, '..', 'Output', 'automation_last_run.txt');
