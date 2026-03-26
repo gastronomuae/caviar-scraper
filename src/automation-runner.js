@@ -297,6 +297,16 @@ async function runDailyAutomation(opts) {
       result.steps.push({ step: 'variant_sync_mapped_updates', ok: false, error: String(e.message || e) });
     }
 
+    // Refresh local Gastronom snapshot again so dashboard/UI reflects post-sync Shopify state immediately.
+    try {
+      const r2 = await runSyncGastronomFromShopify();
+      result.steps.push({ step: 'sync_gastronom_post_sync', ok: true, ...r2 });
+    } catch (e) {
+      // Do not fail the whole automation; sync itself may be successful even if this refresh fails.
+      result.warnings.push(`sync_gastronom_post_sync: ${String(e.message || e)}`);
+      result.steps.push({ step: 'sync_gastronom_post_sync', ok: false, error: String(e.message || e) });
+    }
+
     result.finished_at = new Date().toISOString();
     return result;
   } finally {
