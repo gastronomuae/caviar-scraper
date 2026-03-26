@@ -8,6 +8,12 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
+/**
+ * cPanel/Passenger mode: serve a tiny UI + run the cron CLI script from a browser.
+ * Enable by setting CPANEL_AUTOMATION_UI=1 and AUTOMATION_KEY.
+ */
+const CPANEL_AUTOMATION_UI = process.env.CPANEL_AUTOMATION_UI === '1';
+
 // Same credentials as `node scripts/verify-draft-mutation.js`: load scripts/shopify-test/.env
 // when SHOP / CLIENT_* are not already set in the environment (e.g. plain `npm run review`).
 (function loadOptionalShopifyTestEnv() {
@@ -31,16 +37,14 @@ const { execFile } = require('child_process');
   }
 })();
 
-const {
-  getAccessToken,
+// In CPANEL_AUTOMATION_UI mode we keep dependencies minimal and only run the CLI script.
+let getAccessToken,
   getLocationIdByName,
   setAvailableQuantity,
   setVariantInventoryPolicy,
   setProductStatus,
-  graphql: shopifyGraphql
-} = require('./shopify-inventory');
-const { executeVariantSyncFromSupplier } = require('./shopify-variant-sync');
-const {
+  shopifyGraphql,
+  executeVariantSyncFromSupplier,
   buildMatchingReport,
   writeMatchingReportCsv,
   finalReport,
@@ -52,13 +56,42 @@ const {
   normalizeShopifyList,
   getUnpairedGastronomProducts,
   getUnpairedSupplierProducts,
-  PATHS
-} = require('./product-match');
-const {
+  PATHS,
   normalizeToGastronomFileShape,
-  runSyncGastronomFromShopify
-} = require('./sync-shopify-gastronom');
-const { runDailyAutomation, createFileLock } = require('./automation-runner');
+  runSyncGastronomFromShopify,
+  runDailyAutomation,
+  createFileLock;
+
+if (!CPANEL_AUTOMATION_UI) {
+  ({
+    getAccessToken,
+    getLocationIdByName,
+    setAvailableQuantity,
+    setVariantInventoryPolicy,
+    setProductStatus,
+    graphql: shopifyGraphql
+  } = require('./shopify-inventory'));
+  ({ executeVariantSyncFromSupplier } = require('./shopify-variant-sync'));
+  ({
+    buildMatchingReport,
+    writeMatchingReportCsv,
+    finalReport,
+    loadMapping,
+    loadState,
+    saveMapping,
+    saveState,
+    loadShopifyNormalized,
+    normalizeShopifyList,
+    getUnpairedGastronomProducts,
+    getUnpairedSupplierProducts,
+    PATHS
+  } = require('./product-match'));
+  ({
+    normalizeToGastronomFileShape,
+    runSyncGastronomFromShopify
+  } = require('./sync-shopify-gastronom'));
+  ({ runDailyAutomation, createFileLock } = require('./automation-runner'));
+}
 
 const app = express();
 /** @type {Promise<unknown> | null} */
@@ -172,14 +205,141 @@ function buildAutomationTextLog(run) {
   lines.push('');
   return lines.join('\n');
 }
-const PORT = Number(process.env.REVIEW_PORT || 3001);
+// cPanel Passenger uses PORT. Keep REVIEW_PORT for local dev compatibility.
+const PORT = Number(process.env.PORT || process.env.REVIEW_PORT || 3001);
 const PUBLIC = path.join(__dirname, '../public');
 const SNAP_DIR = path.join(__dirname, '../Output/snapshots/supplier');
-const SUPPLIER_LATEST = PATHS.supplierLatest || path.join(__dirname, '../Output/products_all.latest.json');
+const SUPPLIER_LATEST =
+  (PATHS && PATHS.supplierLatest) || path.join(__dirname, '../Output/products_all.latest.json');
 const SHOPIFY_LOCATION_NAME = (process.env.SHOPIFY_LOCATION_NAME || 'Al Quoz Industrial Area 4').trim();
 const SHOPIFY_LOCATION_ID = (process.env.SHOPIFY_LOCATION_ID || '').trim();
 
 app.use(express.json());
+
+// -------------------------
+// Minimal cPanel automation UI
+// -------------------------
+if (CPANEL_AUTOMATION_UI) {
+  const KEY = String(process.env.AUTOMATION_KEY || '').trim();
+  let running = false;
+
+  function checkKey(req) {
+    const q = String(req.query.key || '').trim();
+    const h = String(req.headers['x-automation-key'] || '').trim();
+    const provided = q || h;
+    if (!KEY) return { ok: false, reason: 'Missing server env AUTOMATION_KEY' };
+    if (!provided || provided !== KEY) return { ok: false, reason: 'Forbidden' };
+    return { ok: true };
+  }
+
+  app.get('/', (req, res) => {
+    const k = checkKey(req);
+    if (!k.ok) return res.status(403).type('text').send(k.reason);
+    res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Caviar Automation</title>
+<style>
+  body{font-family:system-ui,Segoe UI,Roboto,sans-serif;max-width:760px;margin:40px auto;padding:0 16px}
+  button{padding:10px 16px;border-radius:8px;border:1px solid #ccc;cursor:pointer}
+  pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-radius:8px;overflow:auto}
+  .muted{color:#6b7280}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}
+  code{background:#f3f4f6;padding:2px 6px;border-radius:6px}
+</style>
+</head>
+<body>
+  <h1>Caviar Automation</h1>
+  <div class="muted">Protected endpoint. Uses <code>?key=...</code> or header <code>x-automation-key</code>.</div>
+  <div class="row">
+    <button id="run">Run Automation</button>
+    <span id="status" class="muted"></span>
+  </div>
+  <pre id="out">Ready.</pre>
+<script>
+  const key = new URLSearchParams(location.search).get('key') || '';
+  const btn = document.getElementById('run');
+  const out = document.getElementById('out');
+  const st = document.getElementById('status');
+  btn.onclick = async () => {
+    btn.disabled = true; st.textContent = 'Running…'; out.textContent = '';
+    try{
+      const res = await fetch('/run?key=' + encodeURIComponent(key), { method:'POST' });
+      const txt = await res.text();
+      out.textContent = txt;
+      st.textContent = res.ok ? 'Done' : 'Failed';
+    }catch(e){
+      out.textContent = String(e);
+      st.textContent = 'Failed';
+    }finally{
+      btn.disabled = false;
+    }
+  };
+</script>
+</body></html>`);
+  });
+
+  app.post('/run', async (req, res) => {
+    const k = checkKey(req);
+    if (!k.ok) return res.status(403).type('text').send(k.reason);
+    if (running) return res.status(409).type('text').send('Already running');
+    running = true;
+    const started = new Date();
+    console.log(`[automation] start ${started.toISOString()}`);
+    try {
+      const script = path.join(__dirname, '..', 'scripts', 'run-automation-cli.js');
+      const { stdout, stderr } = await new Promise((resolve, reject) => {
+        execFile(process.execPath, [script], { cwd: path.join(__dirname, '..') }, (err, stdout, stderr) => {
+          if (err) return reject(Object.assign(err, { stdout, stderr }));
+          resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+        });
+      });
+      const ended = new Date();
+      console.log(`[automation] ok ${ended.toISOString()} elapsed_ms=${ended - started}`);
+      res.type('text').send(
+        [
+          `Status: OK`,
+          `Started: ${started.toISOString()}`,
+          `Finished: ${ended.toISOString()}`,
+          `Elapsed ms: ${ended - started}`,
+          '',
+          stdout,
+          stderr ? `\n[stderr]\n${stderr}` : ''
+        ].join('\n')
+      );
+    } catch (e) {
+      const ended = new Date();
+      console.log(`[automation] fail ${ended.toISOString()} elapsed_ms=${ended - started} err=${String(e.message || e)}`);
+      const stderr = e && e.stderr ? String(e.stderr) : '';
+      const stdout = e && e.stdout ? String(e.stdout) : '';
+      res.status(500).type('text').send(
+        [
+          `Status: FAIL`,
+          `Started: ${started.toISOString()}`,
+          `Finished: ${ended.toISOString()}`,
+          `Elapsed ms: ${ended - started}`,
+          '',
+          String(e.message || e),
+          stdout ? `\n[stdout]\n${stdout}` : '',
+          stderr ? `\n[stderr]\n${stderr}` : ''
+        ].join('\n')
+      );
+    } finally {
+      running = false;
+    }
+  });
+}
+
+// If running in cPanel mode, don't register the full review UI/API.
+if (CPANEL_AUTOMATION_UI) {
+  const server = app.listen(PORT, () => {
+    console.log(`Caviar Automation UI: listening on port ${PORT}`);
+  });
+  server.on('error', (err) => {
+    console.error(err);
+    process.exit(1);
+  });
+  return;
+}
 
 function ensureFiles() {
   if (!fs.existsSync(PATHS.mapping)) {
