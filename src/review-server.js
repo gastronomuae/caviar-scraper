@@ -368,6 +368,41 @@ if (CPANEL_AUTOMATION_UI) {
   return;
 }
 
+// Deploy endpoint for normal review mode (so GitHub webhook works when full UI is enabled).
+app.all(['/deploy', '/deploy/'], (req, res) => {
+  const key = String(process.env.AUTOMATION_KEY || '').trim();
+  const provided = String(req.query.key || req.headers['x-automation-key'] || '').trim();
+  if (!key) return res.status(403).type('text').send('Missing server env AUTOMATION_KEY');
+  if (!provided || provided !== key) return res.status(403).type('text').send('Forbidden');
+  if (deployInFlight) return res.status(409).type('text').send('Already deploying');
+
+  deployInFlight = true;
+  const started = new Date();
+  console.log(`[deploy-hit] method=${req.method} url=${req.originalUrl}`);
+  console.log(`[deploy] start ${started.toISOString()}`);
+  execFile('bash', [path.join(__dirname, '..', 'scripts', 'deploy.sh')], { cwd: path.join(__dirname, '..') }, (err, stdout, stderr) => {
+    const ended = new Date();
+    deployInFlight = false;
+    if (err) {
+      console.error(err);
+      console.log(`[deploy] fail ${ended.toISOString()} elapsed_ms=${ended - started}`);
+      return res.status(500).type('text').send(`Deploy failed\n\n${String(stderr || stdout || err.message || err)}`);
+    }
+    console.log(String(stdout || '').slice(0, 2000));
+    console.log(`[deploy] ok ${ended.toISOString()} elapsed_ms=${ended - started}`);
+    return res.type('text').send(
+      [
+        'Deployed',
+        `Started: ${started.toISOString()}`,
+        `Finished: ${ended.toISOString()}`,
+        '',
+        String(stdout || ''),
+        stderr ? `\n[stderr]\n${stderr}` : ''
+      ].join('\n')
+    );
+  });
+});
+
 function ensureFiles() {
   if (!fs.existsSync(PATHS.mapping)) {
     fs.mkdirSync(path.dirname(PATHS.mapping), { recursive: true });
