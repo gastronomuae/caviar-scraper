@@ -94,6 +94,12 @@
       <div class="meta">Loading…</div>
     </div>
 
+    <div class="panel" id="supplier-delta-history">
+      <h2 style="margin-top:0;font-size:1rem;">Supplier delta history</h2>
+      <div class="meta" id="supplier-delta-history-meta"></div>
+      <div id="supplier-delta-history-table"></div>
+    </div>
+
     <div class="panel" id="synced">
       <h2 style="margin-top:0;font-size:1rem;">Variant sync (mapped updates)</h2>
       <div class="meta" id="synced-meta"></div>
@@ -150,6 +156,41 @@
       `;
     }
 
+    function deltaHistoryTable(entries) {
+      if (!entries || entries.length === 0) return '<div class="meta" style="margin-top:10px;">—</div>';
+      return `
+        <table>
+          <thead>
+            <tr>
+              <th>Run started</th>
+              <th>Added</th>
+              <th>Updated</th>
+              <th>Removed</th>
+              <th>Variant OK</th>
+              <th>Variant failed</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${entries
+              .map((e) => {
+                const c = e.supplier_delta_counts || {};
+                return `
+                  <tr>
+                    <td>${escapeHtml(e.started_at || '')}</td>
+                    <td>${escapeHtml(String(c.added ?? 0))}</td>
+                    <td>${escapeHtml(String(c.updated ?? 0))}</td>
+                    <td>${escapeHtml(String(c.removed ?? 0))}</td>
+                    <td>${escapeHtml(String(e.variant_sync_ok ?? '—'))}</td>
+                    <td>${escapeHtml(String(e.variant_sync_failed ?? '—'))}</td>
+                  </tr>
+                `;
+              })
+              .join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
     async function load() {
       const status = document.getElementById('status');
       status.textContent = 'Loading…';
@@ -173,6 +214,18 @@
           Variant sync OK: <code>${escapeHtml(String(c.variant_sync_ok ?? 0))}</code> (failed <code>${escapeHtml(String(c.variant_sync_failed ?? 0))}</code>)
         </div>
       `;
+
+      // Supplier delta history table (dynamics over time)
+      try {
+        const hres = await fetch('/api/supplier-delta/history?limit=14');
+        const hj = await hres.json();
+        const entries = Array.isArray(hj?.entries) ? hj.entries : [];
+        document.getElementById('supplier-delta-history-meta').textContent = `Showing last ${entries.length} runs`;
+        document.getElementById('supplier-delta-history-table').innerHTML = deltaHistoryTable(entries);
+      } catch (e) {
+        document.getElementById('supplier-delta-history-meta').textContent = 'History unavailable';
+        document.getElementById('supplier-delta-history-table').innerHTML = '<div class="meta" style="margin-top:10px;">—</div>';
+      }
 
       const step = findStep(run, 'variant_sync_mapped_updates');
       const items = Array.isArray(step?.ok_items) ? step.ok_items : [];

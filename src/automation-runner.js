@@ -160,6 +160,10 @@ async function runDailyAutomation(opts) {
 
   const lock = lockPath ? createFileLock(lockPath) : null;
   const started_at = new Date().toISOString();
+  const SUPPLIER_DELTA_DIR = path.join(__dirname, '..', 'Output', 'supplier_delta_history');
+  const SUPPLIER_DELTA_HISTORY_PATH = path.join(SUPPLIER_DELTA_DIR, 'history.json');
+  let supplierDeltaFileBasename = null;
+  let supplierDeltaStamp = null;
   const result = {
     ok: true,
     started_at,
@@ -191,10 +195,47 @@ async function runDailyAutomation(opts) {
     result.counts.supplier_latest_products = latestArr.length;
     const delta = diffSupplierSnapshots(stagedBefore, latestArr);
     result.counts.supplier_delta_updated = delta.updated.length;
+
+    // Persist supplier delta details for history/debug (so UI can show dynamics over time).
+    supplierDeltaStamp = started_at.replace(/[:.]/g, '-');
+    supplierDeltaFileBasename = `${supplierDeltaStamp}.json`;
+    try {
+      ensureDir(SUPPLIER_DELTA_DIR);
+      const deltaFile = path.join(SUPPLIER_DELTA_DIR, supplierDeltaFileBasename);
+      fs.writeFileSync(deltaFile, JSON.stringify(delta, null, 2), 'utf8');
+
+      let history = [];
+      if (fs.existsSync(SUPPLIER_DELTA_HISTORY_PATH)) {
+        try {
+          history = JSON.parse(fs.readFileSync(SUPPLIER_DELTA_HISTORY_PATH, 'utf8'));
+        } catch (_) {
+          history = [];
+        }
+      }
+      if (!Array.isArray(history)) history = [];
+
+      history.unshift({
+        started_at,
+        supplier_latest_products: result.counts.supplier_latest_products,
+        supplier_delta_updated: result.counts.supplier_delta_updated,
+        supplier_delta_counts: { added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length },
+        delta_file: supplierDeltaFileBasename,
+        // Filled later with finished_at and other counts
+        finished_at: null,
+        drafted_unpaired_active: null,
+        variant_sync_ok: null,
+        variant_sync_failed: null
+      });
+      history = history.slice(0, 30);
+      fs.writeFileSync(SUPPLIER_DELTA_HISTORY_PATH, JSON.stringify(history, null, 2), 'utf8');
+    } catch (e) {
+      result.warnings.push(`supplier_delta_history: ${String(e.message || e)}`);
+    }
     result.steps.push({
       step: 'supplier_delta',
       ok: true,
-      counts: { added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length }
+      counts: { added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length },
+      delta_file: supplierDeltaFileBasename
     });
 
     const pub = publishLatestSupplier(supplierLatestPath);
@@ -308,6 +349,31 @@ async function runDailyAutomation(opts) {
     }
 
     result.finished_at = new Date().toISOString();
+
+    // Update history entry with finished counts for UI.
+    try {
+      if (supplierDeltaStamp) {
+        const updatedEntry = {
+          finished_at: result.finished_at,
+          drafted_unpaired_active: result.counts.drafted_unpaired_active,
+          variant_sync_ok: result.counts.variant_sync_ok,
+          variant_sync_failed: result.counts.variant_sync_failed
+        };
+        if (fs.existsSync(SUPPLIER_DELTA_HISTORY_PATH)) {
+          const raw = fs.readFileSync(SUPPLIER_DELTA_HISTORY_PATH, 'utf8');
+          const history = JSON.parse(raw);
+          if (Array.isArray(history)) {
+            const i = history.findIndex((x) => x && x.delta_file === supplierDeltaFileBasename);
+            if (i >= 0) {
+              history[i] = { ...history[i], ...updatedEntry };
+              fs.writeFileSync(SUPPLIER_DELTA_HISTORY_PATH, JSON.stringify(history, null, 2), 'utf8');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      result.warnings.push(`supplier_delta_history_update: ${String(e.message || e)}`);
+    }
     return result;
   } finally {
     if (lock) lock.release();

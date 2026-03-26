@@ -104,6 +104,7 @@ let deployInFlight = false;
 
 const AUTOMATION_LAST_JSON = path.join(__dirname, '..', 'Output', 'automation_last_run.json');
 const AUTOMATION_LAST_TXT = path.join(__dirname, '..', 'Output', 'automation_last_run.txt');
+const SUPPLIER_DELTA_HISTORY_PATH = path.join(__dirname, '..', 'Output', 'supplier_delta_history', 'history.json');
 
 function execNodeScript(scriptPath, args = []) {
   return new Promise((resolve, reject) => {
@@ -743,6 +744,26 @@ app.get('/api/automation/last-run.txt', (req, res) => {
     res.type('text').send(fs.readFileSync(AUTOMATION_LAST_TXT, 'utf8'));
   } catch (e) {
     res.status(500).type('text').send(String(e.message || e));
+  }
+});
+
+/** Supplier delta history (added/updated/removed) over time. */
+app.get('/api/supplier-delta/history', (req, res) => {
+  try {
+    const max = Number(req.query.limit || 14);
+    const limit = Number.isFinite(max) && max > 0 ? max : 14;
+    if (!fs.existsSync(SUPPLIER_DELTA_HISTORY_PATH)) return res.json({ ok: true, entries: [] });
+    const raw = fs.readFileSync(SUPPLIER_DELTA_HISTORY_PATH, 'utf8');
+    let history = [];
+    try {
+      history = JSON.parse(raw);
+    } catch (_) {
+      history = [];
+    }
+    if (!Array.isArray(history)) history = [];
+    res.json({ ok: true, entries: history.slice(0, limit) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
