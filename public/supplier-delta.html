@@ -108,9 +108,10 @@
 
   <main>
     <div class="row">
+      <button type="button" onclick="runSupplierScan()">Run new supplier scan</button>
       <button type="button" onclick="saveSnapshot()">Save snapshot now</button>
       <button type="button" onclick="publishLatest()">Publish latest to dashboard</button>
-      <button type="button" onclick="load()">Refresh</button>
+      <button type="button" onclick="load()">Reload delta</button>
       <span class="meta" id="status"></span>
     </div>
 
@@ -326,6 +327,26 @@
       }
       const data = JSON.parse(txt);
       status.textContent = `Saved ${data.saved} (${data.count} products)`;
+      await load();
+    }
+
+    async function runSupplierScan() {
+      const status = document.getElementById('status');
+      status.textContent = 'Scanning supplier…';
+      const res = await fetch('/api/supplier-scan', { method: 'POST' });
+      const txt = await res.text();
+      if (!res.ok) {
+        status.textContent = 'Scan failed';
+        alert(txt);
+        return;
+      }
+      const data = JSON.parse(txt);
+      if (!data.ok) {
+        status.textContent = 'Scan failed';
+        alert(data.error || txt);
+        return;
+      }
+      status.textContent = `Scan OK (latest: ${data.latest_count ?? '—'} products)`;
       await load();
     }
 

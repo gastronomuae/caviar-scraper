@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Automation report</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3d8bfd;
+      --ok: #3fb950;
+      --warn: #d4a72c;
+      --bad: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, Segoe UI, Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 12px 20px;
+      border-bottom: 1px solid #2d3a4f;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 1rem; font-weight: 600; margin: 0; }
+    header a { color: var(--accent); text-decoration: none; }
+    header a:hover { text-decoration: underline; }
+    main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+    button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid #3d4f6f;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { border-color: var(--accent); }
+    .panel {
+      background: var(--panel);
+      border: 1px solid #2d3a4f;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .meta { color: var(--muted); font-size: 0.9rem; }
+    .pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid #3d4f6f;
+      background: var(--bg);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .pill.ok { border-color: var(--ok); color: var(--ok); }
+    .pill.warn { border-color: var(--warn); color: var(--warn); }
+    .pill.bad { border-color: var(--bad); color: var(--bad); }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid #2d3a4f; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.8rem; }
+    code { font-size: 0.85em; color: var(--muted); }
+    a { color: var(--accent); }
+    a:visited { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Automation report</h1>
+    <span class="meta" id="hdr"></span>
+    <span style="flex:1 1 auto;"></span>
+    <a href="/">← Back to dashboard</a>
+  </header>
+
+  <main>
+    <div class="row">
+      <button type="button" onclick="load()">Refresh</button>
+      <a class="meta" href="/api/automation/last-run.txt" target="_blank" rel="noopener noreferrer">Open text log</a>
+      <a class="meta" href="/api/automation/last-run" target="_blank" rel="noopener noreferrer">Open JSON</a>
+      <span class="meta" id="status"></span>
+    </div>
+
+    <div class="panel" id="summary">
+      <div class="meta">Loading…</div>
+    </div>
+
+    <div class="panel" id="synced">
+      <h2 style="margin-top:0;font-size:1rem;">Variant sync (mapped updates)</h2>
+      <div class="meta" id="synced-meta"></div>
+      <div id="tbl"></div>
+    </div>
+  </main>
+
+  <script>
+    function escapeHtml(t) {
+      const d = document.createElement('div');
+      d.textContent = t == null ? '' : String(t);
+      return d.innerHTML;
+    }
+
+    function findStep(run, name) {
+      const steps = Array.isArray(run?.steps) ? run.steps : [];
+      return steps.find(s => s && s.step === name) || null;
+    }
+
+    function table(items) {
+      if (!items || items.length === 0) return '<div class="meta" style="margin-top:10px;">—</div>';
+      return `
+        <table>
+          <thead>
+            <tr>
+              <th>Supplier</th>
+              <th>Handle</th>
+              <th>Shopify product</th>
+              <th>Applied</th>
+              <th>Auto-activated?</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map(i => {
+              const a = i.applied || {};
+              const applied = a
+                ? `${a.bulk_update_rows ?? 0} updates, ${a.inventory_rows ?? 0} inventory, ${a.option_values_added ?? 0} option values, ${a.reorder_moved_rows ?? 0} reorders`
+                : '—';
+              return `
+                <tr>
+                  <td>
+                    <strong>${escapeHtml(i.supplier_name || '')}</strong><br/>
+                    ${i.supplier_url ? `<a href="${escapeHtml(i.supplier_url)}" target="_blank" rel="noopener noreferrer">open</a>` : '<span class="meta">—</span>'}
+                  </td>
+                  <td><code>${escapeHtml(i.source_handle || '')}</code></td>
+                  <td><code>${escapeHtml(i.shopify_product_id || '')}</code></td>
+                  <td class="meta">${escapeHtml(applied)}</td>
+                  <td>${i.set_active_after_sync ? '<span class="pill ok">yes</span>' : '<span class="pill">no</span>'}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    async function load() {
+      const status = document.getElementById('status');
+      status.textContent = 'Loading…';
+      const res = await fetch('/api/automation/last-run');
+      const text = await res.text();
+      if (!res.ok) {
+        status.textContent = '';
+        document.getElementById('summary').innerHTML = `<div><strong>No report</strong></div><div class="meta" style="margin-top:8px;">${escapeHtml(text)}</div>`;
+        document.getElementById('tbl').innerHTML = '<div class="meta">—</div>';
+        return;
+      }
+      const run = JSON.parse(text);
+      const c = run.counts || {};
+      document.getElementById('hdr').textContent = run.started_at ? `Started ${run.started_at}` : '';
+      document.getElementById('summary').innerHTML = `
+        <div class="meta">Result: <strong>${run.ok ? 'OK' : 'FAILED'}</strong></div>
+        <div class="meta" style="margin-top:8px;">
+          Supplier latest: <code>${escapeHtml(String(c.supplier_latest_products ?? 0))}</code> ·
+          Supplier updated: <code>${escapeHtml(String(c.supplier_delta_updated ?? 0))}</code> ·
+          Drafted: <code>${escapeHtml(String(c.drafted_unpaired_active ?? 0))}</code> (failed <code>${escapeHtml(String(c.drafted_failures ?? 0))}</code>) ·
+          Variant sync OK: <code>${escapeHtml(String(c.variant_sync_ok ?? 0))}</code> (failed <code>${escapeHtml(String(c.variant_sync_failed ?? 0))}</code>)
+        </div>
+      `;
+
+      const step = findStep(run, 'variant_sync_mapped_updates');
+      const items = Array.isArray(step?.ok_items) ? step.ok_items : [];
+      document.getElementById('synced-meta').textContent = `Targets: ${step?.targets ?? 0} · OK: ${items.length} · Failed: ${step?.failed_count ?? 0}`;
+      document.getElementById('tbl').innerHTML = table(items);
+      status.textContent = '';
+    }
+
+    load();
+  </script>
+</body>
+</html>
+

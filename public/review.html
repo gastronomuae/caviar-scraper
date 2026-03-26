@@ -63,7 +63,7 @@
     .panel h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 12px; }
     .supplier-img, .match-img {
       width: 100%;
-      max-height: 200px;
+      max-height: 150px;
       object-fit: contain;
       background: #0f1419;
       border-radius: 8px;
@@ -302,12 +302,11 @@
 <body>
   <header>
     <h1>Supplier ↔ Gastronom matching</h1>
-    <span class="meta" id="hdr-meta"></span>
-    <button type="button" onclick="downloadCsv()">Download CSV report</button>
     <button type="button" onclick="showUnpairedGastronom()">Gastronom: not on supplier</button>
     <button type="button" onclick="showUnpairedSupplier()">1-caviar: not in Gastronom</button>
     <button type="button" onclick="window.location.href='/supplier-delta'">Supplier delta</button>
     <button type="button" id="btn-sync-gastronom" title="Same as npm run sync:gastronom — refreshes Output/from_gastronom.json from Shopify" onclick="fetchGastronomFromShopify(this)">Fetch Gastronom from Shopify</button>
+    <button type="button" id="btn-run-automation" class="primary" title="Runs: sync Gastronom → supplier scan+snapshot+publish → draft unpaired ACTIVE → sync mapped updates" onclick="runDailyAutomation(this)">Run daily automation</button>
   </header>
   <main>
     <div id="mapping-warn"></div>
@@ -324,7 +323,7 @@
     <div id="status-bar"></div>
     <div class="grid">
       <div class="panel">
-        <h2>Supplier (1-caviar)</h2>
+        <h2>Supplier (1-caviar) <span id="supplier-card-status"></span></h2>
         <div id="supplier-block"></div>
       </div>
       <div class="panel">
@@ -333,7 +332,6 @@
         <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
           <button type="button" class="success" onclick="confirmSelected()">✅ Confirm match</button>
           <button type="button" class="danger" onclick="markNoMatch()">❌ No match</button>
-          <button type="button" class="primary" title="Same sync as on each Gastronom card; uses whichever card is selected (green border)." onclick="syncVariantsFromSupplier(this)">↻ Sync selected card → Shopify</button>
           <button type="button" onclick="openSearch()">🔍 Search manually</button>
         </div>
       </div>
@@ -376,6 +374,22 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="automation-modal">
+    <div class="modal wide">
+      <div class="modal-head">
+        <h2>Automation report</h2>
+        <button type="button" class="modal-close" onclick="document.getElementById('automation-modal').classList.remove('open')">Close</button>
+      </div>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+        <button type="button" onclick="loadLastAutomationReport()">Refresh report</button>
+        <a class="meta" href="/automation-report" target="_blank" rel="noopener noreferrer">Open table view</a>
+        <a class="meta" href="/api/automation/last-run.txt" target="_blank" rel="noopener noreferrer">Open as text</a>
+        <a class="meta" href="/api/automation/last-run" target="_blank" rel="noopener noreferrer">Open as JSON</a>
+      </div>
+      <pre id="automation-log" style="font-size:12px; overflow:auto; max-height:65vh; white-space:pre-wrap;"></pre>
+    </div>
+  </div>
+
   <script>
     const REVIEW_PORT = '3001';
     /** When the page is opened from Live Server or another port, API still targets the review server. */
@@ -412,9 +426,8 @@
 
     function restoreStatusBarFromRow() {
       const bar = document.getElementById('status-bar');
-      const r = rows[idx];
-      if (!bar || !r) return;
-      bar.innerHTML = `<span class="status-badge ${badgeClass(r.status)}">${escapeHtml(r.status)}</span>`;
+      if (!bar) return;
+      bar.innerHTML = '';
     }
 
     /** Non-blocking message in the status strip (no alert/confirm). */
@@ -483,9 +496,10 @@
         document.getElementById('idx-label').textContent = rowsAll?.length
           ? `No results for filter`
           : 'No results';
-        document.getElementById('hdr-meta').textContent = `${rowsAll?.length || 0} supplier rows (caviar/seafood filter)`;
-        document.getElementById('status-bar').innerHTML =
-          `<span class="status-badge st-none">Nothing to show. Try switching filter to All.</span>`;
+        const hdrMeta = document.getElementById('hdr-meta');
+        if (hdrMeta) hdrMeta.textContent = `${rowsAll?.length || 0} supplier rows (caviar/seafood filter)`;
+        document.getElementById('status-bar').innerHTML = '';
+        document.getElementById('supplier-card-status').innerHTML = '';
         document.getElementById('supplier-block').innerHTML = `<p class="meta">—</p>`;
         document.getElementById('matches-block').innerHTML = `<p class="meta">—</p>`;
         return;
@@ -500,18 +514,17 @@
           : filterMode === 'confirmed'
             ? ' · filter: confirmed'
             : '';
-      document.getElementById('hdr-meta').textContent = `${rowsAll?.length || rows.length} supplier rows (caviar/seafood filter)${suffix}`;
+      const hdrMeta = document.getElementById('hdr-meta');
+      if (hdrMeta) hdrMeta.textContent = `${rowsAll?.length || rows.length} supplier rows (caviar/seafood filter)${suffix}`;
 
-      document.getElementById('status-bar').innerHTML =
+      document.getElementById('status-bar').innerHTML = '';
+      document.getElementById('supplier-card-status').innerHTML =
         `<span class="status-badge ${badgeClass(r.status)}">${escapeHtml(r.status)}</span>`;
 
       document.getElementById('supplier-block').innerHTML = `
         ${s.image ? `<img class="supplier-img" src="${escapeAttr(s.image)}" alt="" />` : '<p class="meta">No image</p>'}
         <div class="line"><strong>Name</strong> ${escapeHtml(s.name_en)}</div>
         <div class="line"><strong>Handle</strong> ${escapeHtml(s.handle)}</div>
-        <div class="line"><strong>Price</strong> ${s.price != null ? escapeHtml(String(s.price)) : '—'}</div>
-        <div class="line"><strong>Weight</strong> ${s.weight != null ? escapeHtml(String(s.weight)) + ' g' : '—'}</div>
-        <div class="desc-line">${escapeHtml((s.description_en || '').replace(/\\s+/g,' ').trim())}</div>
         ${renderVariantsTable({ title: 'Supplier variants', variants: s.raw?.variants || [], kind: 'supplier', limit: 6 })}
       `;
 
@@ -520,7 +533,6 @@
 
       if (manualPick) {
         const m = manualPick;
-        const diff = priceDiffLabel(s.price, m.price);
         const scoreLabel =
           m.score != null && m.score !== '' && m.score !== '—'
             ? `${escapeHtml(String(m.score))}%`
@@ -534,10 +546,7 @@
             ${m.image ? `<img class="match-img" src="${escapeAttr(m.image)}" alt="" />` : ''}
             <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)} ${productStatusBadge(m)}</div>
             <div class="line"><strong>Handle</strong> ${escapeHtml(m.handle)}</div>
-            <div class="line"><strong>Price</strong> ${m.price != null ? escapeHtml(String(m.price)) : '—'}</div>
-            <div class="line"><strong>Weight</strong> ${m.weight != null ? escapeHtml(String(m.weight)) + ' g' : '—'}</div>
             ${scoreHtml}
-            ${diff}
             ${renderVariantsTable({
               title: 'Gastronom variants',
               variants: m.raw?.variants || [],
@@ -563,7 +572,6 @@
       parts.push(
         ...suggestionsToRender.map((m, i) => {
           if (!m) return `<div class="match-card muted">—</div>`;
-          const diff = priceDiffLabel(s.price, m.price);
           const scoreHtml = shouldHideScoreLine(m)
             ? ''
             : `<div class="score">Score: ${m.score != null ? escapeHtml(String(m.score)) : '—'}% ${m.reason ? '· ' + escapeHtml(m.reason) : ''}</div>`;
@@ -572,10 +580,7 @@
             ${m.image ? `<img class="match-img" src="${escapeAttr(m.image)}" alt="" />` : ''}
             <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)} ${productStatusBadge(m)}</div>
             <div class="line"><strong>Handle</strong> ${escapeHtml(m.handle)}</div>
-            <div class="line"><strong>Price</strong> ${m.price != null ? escapeHtml(String(m.price)) : '—'}</div>
-            <div class="line"><strong>Weight</strong> ${m.weight != null ? escapeHtml(String(m.weight)) + ' g' : '—'}</div>
             ${scoreHtml}
-            ${diff}
             ${renderVariantsTable({
               title: 'Gastronom variants',
               variants: m.raw?.variants || [],
@@ -797,7 +802,7 @@
           ? ' Product set to ACTIVE (was DRAFT; at least one variant is sellable).'
           : '';
         showInventoryFlash(
-          `Shopify updated: ${a.bulk_update_rows ?? 0} variant row(s), ${a.inventory_rows ?? 0} inventory row(s), ${a.option_values_added ?? 0} new option value(s). Card refreshed from live Shopify.${activeNote}`,
+          `Shopify updated: ${a.bulk_update_rows ?? 0} variant row(s), ${a.inventory_rows ?? 0} inventory row(s), ${a.option_values_added ?? 0} new option value(s), reordered ${a.reorder_moved_rows ?? 0} row(s). Card refreshed from live Shopify.${activeNote}`,
           false
         );
         try {
@@ -1254,6 +1259,90 @@
           el.textContent = prev || 'Fetch Gastronom from Shopify';
         }
       }
+    }
+
+    async function runDailyAutomation(btn) {
+      const el = btn || document.getElementById('btn-run-automation');
+      const prev = el ? el.textContent : '';
+      const ok = confirm(
+        'Run daily automation now?\n\nThis will:\n- Fetch Gastronom from Shopify\n- Scan supplier (1-caviar) and publish latest to dashboard\n- Draft all ACTIVE unpaired Gastronom products\n- Sync variants for mapped products that changed in supplier delta'
+      );
+      if (!ok) return;
+      try {
+        if (el) {
+          el.disabled = true;
+          el.textContent = 'Running…';
+        }
+        const res = await fetch(API + '/api/automation/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        const text = await res.text();
+        let j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (_) {}
+        if (!res.ok) throw new Error(j?.error || text.slice(0, 500) || res.statusText);
+        if (!j?.ok) throw new Error((j?.errors || []).join(' | ') || 'Automation failed');
+        const c = j.counts || {};
+        showInventoryFlash(
+          `Automation OK. Drafted: ${c.drafted_unpaired_active ?? 0} (failed ${c.drafted_failures ?? 0}). Variant sync OK: ${c.variant_sync_ok ?? 0} (failed ${c.variant_sync_failed ?? 0}). Supplier updated: ${c.supplier_delta_updated ?? 0}.`,
+          false
+        );
+        await load();
+        await loadLastAutomationReport(j);
+      } catch (e) {
+        showInventoryFlash(`Automation: ${String(e.message || e)}`, true);
+      } finally {
+        if (el) {
+          el.disabled = false;
+          el.textContent = prev || 'Run daily automation';
+        }
+      }
+    }
+
+    async function loadLastAutomationReport(prefetchedJson) {
+      try {
+        const modal = document.getElementById('automation-modal');
+        const pre = document.getElementById('automation-log');
+        if (!modal || !pre) return;
+        modal.classList.add('open');
+
+        let text = '';
+        if (prefetchedJson) {
+          text = formatAutomationReport(prefetchedJson);
+        } else {
+          const res = await fetch(API + '/api/automation/last-run.txt');
+          text = await res.text();
+          if (!res.ok) throw new Error(text || 'Failed to load automation report');
+        }
+        pre.textContent = text;
+      } catch (e) {
+        showInventoryFlash(`Automation report: ${String(e.message || e)}`, true);
+      }
+    }
+
+    function formatAutomationReport(j) {
+      const c = j?.counts || {};
+      const lines = [];
+      lines.push('Automation run');
+      lines.push(`Started: ${j.started_at || '—'}`);
+      lines.push(`Finished: ${j.finished_at || '—'}`);
+      lines.push(`Result: ${j.ok ? 'OK' : 'FAILED'}`);
+      lines.push('');
+      lines.push('Summary');
+      lines.push(`- Supplier latest products: ${c.supplier_latest_products ?? 0}`);
+      lines.push(`- Supplier delta updated: ${c.supplier_delta_updated ?? 0}`);
+      lines.push(`- Drafted unpaired ACTIVE: ${c.drafted_unpaired_active ?? 0} (failed ${c.drafted_failures ?? 0})`);
+      lines.push(`- Variant sync OK: ${c.variant_sync_ok ?? 0} (failed ${c.variant_sync_failed ?? 0})`);
+      const errs = j?.errors || [];
+      if (errs && errs.length) {
+        lines.push('');
+        lines.push('Errors');
+        for (const e of errs) lines.push(`- ${String(e)}`);
+      }
+      return lines.join('\n');
     }
 
     function openSearch() {

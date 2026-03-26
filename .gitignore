@@ -8,6 +8,11 @@ node_modules/
 Output/shopify_token_cache.json
 Output/shopify_location_cache.json
 *.bak
+
+# Local automation artifacts (generated at runtime)
+Output/automation_last_run.json
+Output/automation_last_run.txt
+Output/snapshots/
 .DS_Store
 Thumbs.db
 

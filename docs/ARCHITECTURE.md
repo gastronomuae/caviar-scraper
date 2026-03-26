@@ -149,6 +149,7 @@ Updated by **Confirm** in the UI (`POST /api/confirm`). This is the **confirmed*
 | POST | `/api/sync-gastronom` | Shopify Admin → refresh `Output/from_gastronom.json` (same work as `npm run sync:gastronom`) |
 | POST | `/api/unpaired-gastronom/draft-active` | Draft all ACTIVE products from `GET /api/unpaired-gastronom` |
 | POST | `/api/variants/sync-from-supplier` | Align a single mapped product’s variants (prices/policies/qty/weights) from supplier JSON; may auto-activate if product is DRAFT but at least one variant is sellable |
+| POST | `/api/automation/run` | Runs the “daily automation” sequence: sync Gastronom → supplier scan+snapshot+publish → draft unpaired ACTIVE → sync mapped supplier updates |
 
 Env: `REVIEW_PORT` (default `3001`), `PRODUCT_MATCH_BROAD` (`0` strict, `1` broad).
 

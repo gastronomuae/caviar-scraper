@@ -312,6 +312,52 @@ async function inventorySetQuantitiesBatch(token, locationId, items) {
   }
 }
 
+function variantSortKey(v) {
+  const g = gramsFromShopifyVariant(v);
+  if (g == null) return { missing: 1, grams: Number.MAX_SAFE_INTEGER, title: String(v?.title || '') };
+  return { missing: 0, grams: g, title: String(v?.title || '') };
+}
+
+function buildVariantReorderPositions(productNorm) {
+  const vars = Array.isArray(productNorm?.variants) ? productNorm.variants : [];
+  if (vars.length <= 1) return [];
+  const sorted = [...vars].sort((a, b) => {
+    const ak = variantSortKey(a);
+    const bk = variantSortKey(b);
+    if (ak.missing !== bk.missing) return ak.missing - bk.missing;
+    if (ak.grams !== bk.grams) return ak.grams - bk.grams;
+    return ak.title.localeCompare(bk.title, 'ru');
+  });
+  const positions = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const wanted = sorted[i];
+    const currentIdx = vars.findIndex((v) => v?.id === wanted?.id);
+    if (currentIdx !== i && wanted?.id) {
+      // Shopify positions are 1-based.
+      positions.push({ id: wanted.id, position: i + 1 });
+    }
+  }
+  return positions;
+}
+
+async function productVariantsBulkReorder(token, productId, positions) {
+  if (!Array.isArray(positions) || positions.length === 0) return 0;
+  const data = await graphql(
+    token,
+    `mutation Reorder($productId: ID!, $positions: [ProductVariantPositionInput!]!) {
+      productVariantsBulkReorder(productId: $productId, positions: $positions) {
+        userErrors { field message }
+      }
+    }`,
+    { productId, positions }
+  );
+  const ues = data?.productVariantsBulkReorder?.userErrors || [];
+  if (Array.isArray(ues) && ues.length) {
+    throw new Error(`productVariantsBulkReorder: ${JSON.stringify(ues)}`);
+  }
+  return positions.length;
+}
+
 function optionValueNames(opt) {
   const vals = opt?.values;
   if (Array.isArray(vals) && vals.length)
@@ -403,6 +449,17 @@ async function executeVariantSyncFromSupplier(productGid, supplierProduct, locat
     await inventorySetQuantitiesBatch(token, locationId, invItems.slice(i, i + invChunk));
   }
 
+  // Keep Shopify variant order predictable in Admin/UI: smallest weight -> largest.
+  productNorm = await fetchProductForSync(token, productGid);
+  const reorderPositions = buildVariantReorderPositions(productNorm);
+  let reorderMoved = 0;
+  try {
+    reorderMoved = await productVariantsBulkReorder(token, productNorm.id, reorderPositions);
+  } catch (e) {
+    // Reordering is best-effort; do not fail the whole sync if Shopify rejects positions.
+    reorderMoved = 0;
+  }
+
   const finalNorm = await fetchProductForSync(token, productGid);
   const forStatus = finalNorm || productNorm;
   let setActiveAfterSync = false;
@@ -422,7 +479,8 @@ async function executeVariantSyncFromSupplier(productGid, supplierProduct, locat
     applied: {
       bulk_update_rows: bulkInputs.length,
       inventory_rows: invItems.length,
-      option_values_added: namesToAdd.length
+      option_values_added: namesToAdd.length,
+      reorder_moved_rows: reorderMoved
     },
     set_active_after_sync: setActiveAfterSync
   };

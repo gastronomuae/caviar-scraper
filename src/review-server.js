@@ -6,6 +6,7 @@ if (process.env.PRODUCT_MATCH_BROAD === undefined) {
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 
 // Same credentials as `node scripts/verify-draft-mutation.js`: load scripts/shopify-test/.env
 // when SHOP / CLIENT_* are not already set in the environment (e.g. plain `npm run review`).
@@ -61,6 +62,113 @@ const {
 const app = express();
 /** @type {Promise<unknown> | null} */
 let gastronomSyncInFlight = null;
+/** @type {Promise<unknown> | null} */
+let dailyAutomationInFlight = null;
+
+const AUTOMATION_LAST_JSON = path.join(__dirname, '..', 'Output', 'automation_last_run.json');
+const AUTOMATION_LAST_TXT = path.join(__dirname, '..', 'Output', 'automation_last_run.txt');
+
+function execNodeScript(scriptPath, args = []) {
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, [scriptPath, ...args], { cwd: path.join(__dirname, '..') }, (err, stdout, stderr) => {
+      if (err) {
+        const msg = `${err.message}\n${String(stderr || stdout || '').slice(0, 800)}`;
+        return reject(new Error(msg));
+      }
+      resolve({ ok: true, stdout: String(stdout || ''), stderr: String(stderr || '') });
+    });
+  });
+}
+
+function ensureOutputDir() {
+  const outDir = path.join(__dirname, '..', 'Output');
+  fs.mkdirSync(outDir, { recursive: true });
+}
+
+function fmt(n) {
+  const x = Number(n);
+  return Number.isFinite(x) ? String(x) : '0';
+}
+
+function buildAutomationTextLog(run) {
+  const lines = [];
+  lines.push(`Automation run`);
+  lines.push(`Started: ${run.started_at || '—'}`);
+  lines.push(`Finished: ${run.finished_at || '—'}`);
+  lines.push(`Result: ${run.ok ? 'OK' : 'FAILED'}`);
+  lines.push('');
+
+  const c = run.counts || {};
+  lines.push(`Summary`);
+  lines.push(`- Supplier latest products: ${fmt(c.supplier_latest_products)}`);
+  lines.push(`- Supplier delta updated: ${fmt(c.supplier_delta_updated)}`);
+  lines.push(`- Drafted unpaired ACTIVE: ${fmt(c.drafted_unpaired_active)} (failed ${fmt(c.drafted_failures)})`);
+  lines.push(`- Variant sync OK: ${fmt(c.variant_sync_ok)} (failed ${fmt(c.variant_sync_failed)})`);
+  lines.push('');
+
+  const steps = Array.isArray(run.steps) ? run.steps : [];
+  lines.push(`Steps`);
+  for (const s of steps) {
+    const name = s?.step || 'unknown';
+    const ok = s?.ok === true ? 'OK' : 'FAIL';
+    lines.push(`- ${name}: ${ok}`);
+    if (s?.error) lines.push(`  error: ${String(s.error).slice(0, 500)}`);
+    if (name === 'sync_gastronom' && s?.ok) {
+      lines.push(`  shop: ${s.shop || '—'} vendor: ${s.vendor || '—'} products: ${fmt(s.products)}`);
+      if (s.delta_counts) {
+        lines.push(
+          `  delta: +${fmt(s.delta_counts.added)} ~${fmt(s.delta_counts.updated)} -${fmt(s.delta_counts.removed)}`
+        );
+      }
+    }
+    if (name === 'supplier_snapshot' && s?.ok) {
+      lines.push(`  saved: ${s.saved || '—'} count: ${fmt(s.count)}`);
+    }
+    if (name === 'supplier_delta' && s?.ok && s?.counts) {
+      lines.push(`  delta: +${fmt(s.counts.added)} ~${fmt(s.counts.updated)} -${fmt(s.counts.removed)}`);
+    }
+    if (name === 'draft_unpaired_active' && s) {
+      lines.push(`  eligible_active: ${fmt(s.eligible_active)} drafted: ${fmt(s.drafted)} failed: ${fmt((s.failed || []).length)}`);
+      const failed = Array.isArray(s.failed) ? s.failed : [];
+      for (const f of failed.slice(0, 10)) {
+        lines.push(`  - failed ${f.handle || ''} ${f.shopify_product_id || ''}: ${String(f.error || '').slice(0, 200)}`);
+      }
+      if (failed.length > 10) lines.push(`  - … ${failed.length - 10} more failures`);
+    }
+    if (name === 'variant_sync_mapped_updates' && s) {
+      lines.push(
+        `  targets: ${fmt(s.targets)} ok: ${fmt(s.ok_count)} failed: ${fmt(s.failed_count)} skipped: ${fmt(s.skipped_count)}`
+      );
+      const failed = Array.isArray(s.failed) ? s.failed : [];
+      for (const f of failed.slice(0, 10)) {
+        lines.push(
+          `  - failed ${f.source_handle || ''} ${f.shopify_product_id || ''}: ${String(f.error || '').slice(0, 200)}`
+        );
+      }
+      if (failed.length > 10) lines.push(`  - … ${failed.length - 10} more failures`);
+      const skipped = Array.isArray(s.skipped) ? s.skipped : [];
+      for (const sk of skipped.slice(0, 10)) {
+        lines.push(`  - skipped ${sk.source_handle || ''}: ${String(sk.reason || '').slice(0, 200)}`);
+      }
+      if (skipped.length > 10) lines.push(`  - … ${skipped.length - 10} more skipped`);
+    }
+  }
+
+  const errs = Array.isArray(run.errors) ? run.errors : [];
+  if (errs.length) {
+    lines.push('');
+    lines.push('Errors');
+    for (const e of errs) lines.push(`- ${String(e).slice(0, 800)}`);
+  }
+  const warns = Array.isArray(run.warnings) ? run.warnings : [];
+  if (warns.length) {
+    lines.push('');
+    lines.push('Warnings');
+    for (const w of warns) lines.push(`- ${String(w).slice(0, 800)}`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
 const PORT = Number(process.env.REVIEW_PORT || 3001);
 const PUBLIC = path.join(__dirname, '../public');
 const SNAP_DIR = path.join(__dirname, '../Output/snapshots/supplier');
@@ -304,6 +412,219 @@ app.post('/api/sync-gastronom', async (req, res) => {
   }
 });
 
+/**
+ * Daily automation (single button):
+ * 1) Sync Gastronom from Shopify
+ * 2) Supplier scan -> latest; save snapshot; compute delta; publish latest to dashboard
+ * 3) Draft all ACTIVE unpaired Gastronom products
+ * 4) For each supplier-delta "updated" handle that has mapping and exists in Gastronom export -> sync variants
+ */
+app.post('/api/automation/run', async (req, res) => {
+  if (dailyAutomationInFlight) {
+    return res.status(409).json({ ok: false, error: 'Automation already running; wait for it to finish.' });
+  }
+
+  dailyAutomationInFlight = (async () => {
+    const started_at = new Date().toISOString();
+    const result = {
+      ok: true,
+      started_at,
+      steps: /** @type {any[]} */ ([]),
+      warnings: /** @type {string[]} */ ([]),
+      errors: /** @type {string[]} */ ([]),
+      counts: {
+        supplier_latest_products: 0,
+        supplier_delta_updated: 0,
+        drafted_unpaired_active: 0,
+        drafted_failures: 0,
+        variant_sync_ok: 0,
+        variant_sync_failed: 0
+      }
+    };
+
+    // Step 1: Shopify -> Output/from_gastronom.json
+    try {
+      const r = await runSyncGastronomFromShopify();
+      result.steps.push({ step: 'sync_gastronom', ok: true, ...r });
+    } catch (e) {
+      result.ok = false;
+      result.errors.push(`sync_gastronom: ${String(e.message || e)}`);
+      result.steps.push({ step: 'sync_gastronom', ok: false, error: String(e.message || e) });
+      return result;
+    }
+
+    // Step 2: supplier scan -> latest, snapshot existing staged, delta, publish latest
+    const stagedBefore = readSupplierFile(PATHS.supplier);
+    try {
+      const rScan = await execNodeScript(path.join(__dirname, 'fetch-products-all-1caviar.js'));
+      result.steps.push({ step: 'supplier_scan', ok: true, note: 'Wrote Output/products_all.latest.json', ...rScan });
+    } catch (e) {
+      result.ok = false;
+      result.errors.push(`supplier_scan: ${String(e.message || e)}`);
+      result.steps.push({ step: 'supplier_scan', ok: false, error: String(e.message || e) });
+      return result;
+    }
+
+    const snap = saveSupplierSnapshot();
+    result.steps.push({ step: 'supplier_snapshot', ok: true, ...snap });
+
+    const latestArr = readSupplierFile(SUPPLIER_LATEST);
+    result.counts.supplier_latest_products = latestArr.length;
+    const delta = diffSupplierSnapshots(Array.isArray(stagedBefore) ? stagedBefore : [], latestArr);
+    result.counts.supplier_delta_updated = delta.updated.length;
+    result.steps.push({
+      step: 'supplier_delta',
+      ok: true,
+      counts: { added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length }
+    });
+
+    const pub = publishLatestSupplier();
+    result.steps.push({ step: 'supplier_publish', ok: true, ...pub });
+
+    // Step 3: Draft ACTIVE unpaired Gastronom products
+    try {
+      const { products, active } = getUnpairedGastronomProducts();
+      const targets = (products || []).filter(
+        (p) => p?.shopify_product_id && String(p.status || '').trim().toUpperCase() === 'ACTIVE'
+      );
+      const drafted = [];
+      const failed = [];
+      for (const p of targets) {
+        try {
+          await setProductStatus(p.shopify_product_id, 'DRAFT');
+          drafted.push(p.shopify_product_id);
+        } catch (e) {
+          failed.push({ shopify_product_id: p.shopify_product_id, handle: p.handle, error: String(e.message || e) });
+        }
+      }
+      result.counts.drafted_unpaired_active = drafted.length;
+      result.counts.drafted_failures = failed.length;
+      result.steps.push({
+        step: 'draft_unpaired_active',
+        ok: failed.length === 0,
+        list_active_count: active,
+        eligible_active: targets.length,
+        drafted: drafted.length,
+        failed
+      });
+    } catch (e) {
+      result.ok = false;
+      result.errors.push(`draft_unpaired_active: ${String(e.message || e)}`);
+      result.steps.push({ step: 'draft_unpaired_active', ok: false, error: String(e.message || e) });
+      // continue; we still try variant sync
+    }
+
+    // Step 4: Sync variants for all confirmed mapped products that exist in both supplier + Gastronom export.
+    try {
+      const mapping = loadMapping();
+      const shopify = loadShopifyNormalized();
+      const gastronomGids = new Set(shopify.map((s) => s.shopify_product_id).filter(Boolean));
+      const loc = SHOPIFY_LOCATION_ID || SHOPIFY_LOCATION_NAME;
+
+      /** @type {{ source_handle: string, shopify_product_id: string }[]} */
+      const syncTargets = [];
+      /** @type {{ source_handle: string, shopify_product_id: string, reason: string }[]} */
+      const skipped = [];
+      for (const [hRaw, gidRaw] of Object.entries(mapping || {})) {
+        const h = String(hRaw || '').trim();
+        const gid = String(gidRaw || '').trim();
+        if (!h || !gid) continue;
+        const supplier = readSupplierProductByHandle(h);
+        if (!supplier) {
+          skipped.push({ source_handle: h, shopify_product_id: gid, reason: 'no supplier row for handle (not in products_all.json)' });
+          continue;
+        }
+        if (!gastronomGids.has(gid)) {
+          skipped.push({ source_handle: h, shopify_product_id: gid, reason: 'mapped GID not present in from_gastronom.json (vendor filter?)' });
+          continue;
+        }
+        syncTargets.push({ source_handle: h, shopify_product_id: gid });
+      }
+
+      const ok = /** @type {any[]} */ ([]);
+      const failed = /** @type {any[]} */ ([]);
+      for (const t of syncTargets) {
+        try {
+          const supplier = readSupplierProductByHandle(t.source_handle);
+          if (!supplier) throw new Error(`No supplier row for handle: ${t.source_handle}`);
+          const r = await executeVariantSyncFromSupplier(t.shopify_product_id, supplier, loc, { dryRun: false });
+          ok.push({
+            ...t,
+            supplier_name: supplier?.name ?? '',
+            supplier_url: supplier?.url ?? '',
+            set_active_after_sync: Boolean(r?.set_active_after_sync),
+            applied: r?.applied || null
+          });
+        } catch (e) {
+          failed.push({ ...t, error: String(e.message || e) });
+        }
+      }
+
+      result.counts.variant_sync_ok = ok.length;
+      result.counts.variant_sync_failed = failed.length;
+      result.steps.push({
+        step: 'variant_sync_mapped_updates',
+        ok: failed.length === 0,
+        targets: syncTargets.length,
+        ok_count: ok.length,
+        failed_count: failed.length,
+        ok_items: ok,
+        skipped_count: skipped.length,
+        skipped: skipped,
+        failed
+      });
+    } catch (e) {
+      result.ok = false;
+      result.errors.push(`variant_sync_mapped_updates: ${String(e.message || e)}`);
+      result.steps.push({ step: 'variant_sync_mapped_updates', ok: false, error: String(e.message || e) });
+    }
+
+    result.finished_at = new Date().toISOString();
+
+    // Persist an easy-to-read report for operators.
+    try {
+      ensureOutputDir();
+      fs.writeFileSync(AUTOMATION_LAST_JSON, JSON.stringify(result, null, 2), 'utf8');
+      fs.writeFileSync(AUTOMATION_LAST_TXT, buildAutomationTextLog(result), 'utf8');
+      result.report_paths = {
+        json: path.basename(AUTOMATION_LAST_JSON),
+        txt: path.basename(AUTOMATION_LAST_TXT)
+      };
+    } catch (e) {
+      result.warnings.push(`Could not write automation report files: ${String(e.message || e)}`);
+    }
+
+    return result;
+  })().finally(() => {
+    dailyAutomationInFlight = null;
+  });
+
+  try {
+    const out = await dailyAutomationInFlight;
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/automation/last-run', (req, res) => {
+  try {
+    if (!fs.existsSync(AUTOMATION_LAST_JSON)) return res.status(404).json({ ok: false, error: 'No automation run saved yet.' });
+    res.type('json').send(fs.readFileSync(AUTOMATION_LAST_JSON, 'utf8'));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/automation/last-run.txt', (req, res) => {
+  try {
+    if (!fs.existsSync(AUTOMATION_LAST_TXT)) return res.status(404).type('text').send('No automation run saved yet.');
+    res.type('text').send(fs.readFileSync(AUTOMATION_LAST_TXT, 'utf8'));
+  } catch (e) {
+    res.status(500).type('text').send(String(e.message || e));
+  }
+});
+
 app.post('/api/confirm', (req, res) => {
   try {
     const { source_handle, shopify_product_id } = req.body || {};
@@ -421,6 +742,17 @@ app.post('/api/supplier-snapshot', (req, res) => {
     res.json({ ok: true, ...saved });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+/** Run supplier scan (same as `npm run fetch:products-all`) and write Output/products_all.latest.json. */
+app.post('/api/supplier-scan', async (req, res) => {
+  try {
+    const r = await execNodeScript(path.join(__dirname, 'fetch-products-all-1caviar.js'));
+    const latestArr = readSupplierFile(SUPPLIER_LATEST);
+    res.json({ ok: true, latest_count: latestArr.length, ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
@@ -603,6 +935,10 @@ app.use(express.static(PUBLIC));
 
 app.get('/supplier-delta', (req, res) => {
   res.sendFile(path.join(PUBLIC, 'supplier-delta.html'));
+});
+
+app.get('/automation-report', (req, res) => {
+  res.sendFile(path.join(PUBLIC, 'automation-report.html'));
 });
 
 ensureFiles();
