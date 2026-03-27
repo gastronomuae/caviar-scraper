@@ -367,6 +367,94 @@ function optionValueNames(opt) {
   return new Set();
 }
 
+function numOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normPolicy(v) {
+  return String(v || '')
+    .trim()
+    .toUpperCase();
+}
+
+function snapshotVariantByGrams(productNorm) {
+  const m = new Map();
+  const vars = Array.isArray(productNorm?.variants) ? productNorm.variants : [];
+  for (const v of vars) {
+    const g = gramsFromShopifyVariant(v);
+    if (g == null) continue;
+    if (!m.has(g)) {
+      m.set(g, {
+        grams: g,
+        variant_id: v?.id || null,
+        price: numOrNull(v?.price),
+        qty: numOrNull(v?.inventoryQuantity),
+        inventory_policy: normPolicy(v?.inventoryPolicy)
+      });
+    }
+  }
+  return m;
+}
+
+function buildVariantChanges(beforeProduct, afterProduct) {
+  const before = snapshotVariantByGrams(beforeProduct);
+  const after = snapshotVariantByGrams(afterProduct);
+  const keys = new Set([...before.keys(), ...after.keys()]);
+  const out = [];
+  for (const grams of [...keys].sort((a, b) => a - b)) {
+    const b = before.get(grams) || null;
+    const a = after.get(grams) || null;
+    if (!b && a) {
+      out.push({
+        grams,
+        change_type: 'added',
+        variant_id_before: null,
+        variant_id_after: a.variant_id,
+        price_from: null,
+        price_to: a.price,
+        qty_from: null,
+        qty_to: a.qty,
+        inventory_policy_from: null,
+        inventory_policy_to: a.inventory_policy
+      });
+      continue;
+    }
+    if (b && !a) {
+      out.push({
+        grams,
+        change_type: 'removed',
+        variant_id_before: b.variant_id,
+        variant_id_after: null,
+        price_from: b.price,
+        price_to: null,
+        qty_from: b.qty,
+        qty_to: null,
+        inventory_policy_from: b.inventory_policy,
+        inventory_policy_to: null
+      });
+      continue;
+    }
+    if (!b || !a) continue;
+    const changed =
+      b.price !== a.price || b.qty !== a.qty || b.inventory_policy !== a.inventory_policy || b.variant_id !== a.variant_id;
+    if (!changed) continue;
+    out.push({
+      grams,
+      change_type: 'updated',
+      variant_id_before: b.variant_id,
+      variant_id_after: a.variant_id,
+      price_from: b.price,
+      price_to: a.price,
+      qty_from: b.qty,
+      qty_to: a.qty,
+      inventory_policy_from: b.inventory_policy,
+      inventory_policy_to: a.inventory_policy
+    });
+  }
+  return out;
+}
+
 /**
  * Aligns Shopify product variants with supplier JSON: prices, inventory policy, qty,
  * creates missing weights (option values + variants), zeros orphans (not on supplier).
@@ -381,6 +469,7 @@ async function executeVariantSyncFromSupplier(productGid, supplierProduct, locat
 
   let productNorm = await fetchProductForSync(token, productGid);
   if (!productNorm) throw new Error(`Product not found: ${productGid}`);
+  const beforeSyncProduct = productNorm;
 
   let weightOpt = getWeightOption(productNorm);
   if (!weightOpt?.id) throw new Error('Could not detect a product option for variant weights.');
@@ -462,6 +551,7 @@ async function executeVariantSyncFromSupplier(productGid, supplierProduct, locat
 
   const finalNorm = await fetchProductForSync(token, productGid);
   const forStatus = finalNorm || productNorm;
+  const variantChanges = buildVariantChanges(beforeSyncProduct, forStatus);
   let setActiveAfterSync = false;
   const statusNow = String(forStatus?.status || '')
     .trim()
@@ -482,6 +572,7 @@ async function executeVariantSyncFromSupplier(productGid, supplierProduct, locat
       option_values_added: namesToAdd.length,
       reorder_moved_rows: reorderMoved
     },
+    variant_changes: variantChanges,
     set_active_after_sync: setActiveAfterSync
   };
 }

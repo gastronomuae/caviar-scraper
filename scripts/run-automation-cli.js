@@ -29,6 +29,8 @@ const SUPPLIER_LATEST = path.join(OUT_DIR, 'products_all.latest.json');
 const SNAP_DIR = path.join(OUT_DIR, 'snapshots', 'supplier');
 const REPORT_JSON = path.join(OUT_DIR, 'automation_last_run.json');
 const REPORT_TXT = path.join(OUT_DIR, 'automation_last_run.txt');
+const HISTORY_DIR = path.join(OUT_DIR, 'automation_history');
+const HISTORY_INDEX = path.join(HISTORY_DIR, 'index.json');
 
 function fmt(n) {
   const x = Number(n);
@@ -52,6 +54,19 @@ function buildText(run) {
   ].join('\n');
 }
 
+function toRunId(iso) {
+  return String(iso || new Date().toISOString()).replace(/[:.]/g, '-');
+}
+
+function readJsonSafe(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (_) {
+    return fallback;
+  }
+}
+
 (async () => {
   const loc = (process.env.SHOPIFY_LOCATION_ID || process.env.SHOPIFY_LOCATION_NAME || 'Al Quoz Industrial Area 4').trim();
   const run = await runDailyAutomation({
@@ -64,6 +79,25 @@ function buildText(run) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.writeFileSync(REPORT_JSON, JSON.stringify(run, null, 2), 'utf8');
   fs.writeFileSync(REPORT_TXT, buildText(run), 'utf8');
+
+  fs.mkdirSync(HISTORY_DIR, { recursive: true });
+  const runId = toRunId(run?.started_at);
+  const runFile = `${runId}.json`;
+  fs.writeFileSync(path.join(HISTORY_DIR, runFile), JSON.stringify(run, null, 2), 'utf8');
+
+  let index = readJsonSafe(HISTORY_INDEX, []);
+  if (!Array.isArray(index)) index = [];
+  index = index.filter((x) => x && x.id !== runId);
+  index.unshift({
+    id: runId,
+    started_at: run?.started_at || null,
+    finished_at: run?.finished_at || null,
+    ok: run?.ok === true,
+    counts: run?.counts || {},
+    file: runFile
+  });
+  index = index.slice(0, 60);
+  fs.writeFileSync(HISTORY_INDEX, JSON.stringify(index, null, 2), 'utf8');
 
   console.log(buildText(run));
   process.exit(run.ok ? 0 : 2);

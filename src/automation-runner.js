@@ -312,7 +312,8 @@ async function runDailyAutomation(opts) {
             supplier_name: t.supplier?.name ?? '',
             supplier_url: t.supplier?.url ?? '',
             set_active_after_sync: Boolean(r?.set_active_after_sync),
-            applied: r?.applied || null
+            applied: r?.applied || null,
+            variant_changes: Array.isArray(r?.variant_changes) ? r.variant_changes : []
           });
         } catch (e) {
           failed.push({ source_handle: t.source_handle, shopify_product_id: t.shopify_product_id, error: String(e.message || e) });

@@ -104,6 +104,8 @@ let deployInFlight = false;
 
 const AUTOMATION_LAST_JSON = path.join(__dirname, '..', 'Output', 'automation_last_run.json');
 const AUTOMATION_LAST_TXT = path.join(__dirname, '..', 'Output', 'automation_last_run.txt');
+const AUTOMATION_HISTORY_DIR = path.join(__dirname, '..', 'Output', 'automation_history');
+const AUTOMATION_HISTORY_INDEX = path.join(AUTOMATION_HISTORY_DIR, 'index.json');
 const SUPPLIER_DELTA_HISTORY_PATH = path.join(__dirname, '..', 'Output', 'supplier_delta_history', 'history.json');
 
 function execNodeScript(scriptPath, args = []) {
@@ -121,6 +123,53 @@ function execNodeScript(scriptPath, args = []) {
 function ensureOutputDir() {
   const outDir = path.join(__dirname, '..', 'Output');
   fs.mkdirSync(outDir, { recursive: true });
+}
+
+function toRunId(iso) {
+  const s = String(iso || new Date().toISOString());
+  return s.replace(/[:.]/g, '-');
+}
+
+function readJsonSafe(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function writeAutomationArtifacts(result) {
+  ensureOutputDir();
+  fs.writeFileSync(AUTOMATION_LAST_JSON, JSON.stringify(result, null, 2), 'utf8');
+  fs.writeFileSync(AUTOMATION_LAST_TXT, buildAutomationTextLog(result), 'utf8');
+
+  fs.mkdirSync(AUTOMATION_HISTORY_DIR, { recursive: true });
+  const runId = toRunId(result?.started_at);
+  const runFile = `${runId}.json`;
+  const runPath = path.join(AUTOMATION_HISTORY_DIR, runFile);
+  fs.writeFileSync(runPath, JSON.stringify(result, null, 2), 'utf8');
+
+  let index = readJsonSafe(AUTOMATION_HISTORY_INDEX, []);
+  if (!Array.isArray(index)) index = [];
+  index = index.filter((x) => x && x.id !== runId);
+  index.unshift({
+    id: runId,
+    started_at: result?.started_at || null,
+    finished_at: result?.finished_at || null,
+    ok: result?.ok === true,
+    counts: result?.counts || {},
+    file: runFile
+  });
+  index = index.slice(0, 60);
+  fs.writeFileSync(AUTOMATION_HISTORY_INDEX, JSON.stringify(index, null, 2), 'utf8');
+
+  return {
+    run_id: runId,
+    json: path.basename(AUTOMATION_LAST_JSON),
+    txt: path.basename(AUTOMATION_LAST_TXT),
+    history_json: runFile
+  };
 }
 
 function fmt(n) {
@@ -703,10 +752,7 @@ app.post('/api/automation/run', async (req, res) => {
   })
     .then((result) => {
       try {
-        ensureOutputDir();
-        fs.writeFileSync(AUTOMATION_LAST_JSON, JSON.stringify(result, null, 2), 'utf8');
-        fs.writeFileSync(AUTOMATION_LAST_TXT, buildAutomationTextLog(result), 'utf8');
-        result.report_paths = { json: path.basename(AUTOMATION_LAST_JSON), txt: path.basename(AUTOMATION_LAST_TXT) };
+        result.report_paths = writeAutomationArtifacts(result);
       } catch (e) {
         result.warnings = result.warnings || [];
         result.warnings.push(`Could not write automation report files: ${String(e.message || e)}`);
@@ -744,6 +790,30 @@ app.get('/api/automation/last-run.txt', (req, res) => {
     res.type('text').send(fs.readFileSync(AUTOMATION_LAST_TXT, 'utf8'));
   } catch (e) {
     res.status(500).type('text').send(String(e.message || e));
+  }
+});
+
+app.get('/api/automation/history', (req, res) => {
+  try {
+    const max = Number(req.query.limit || 30);
+    const limit = Number.isFinite(max) && max > 0 ? max : 30;
+    const index = readJsonSafe(AUTOMATION_HISTORY_INDEX, []);
+    const entries = Array.isArray(index) ? index.slice(0, limit) : [];
+    res.json({ ok: true, entries });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/automation/history/:id', (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ ok: false, error: 'id required' });
+    const runPath = path.join(AUTOMATION_HISTORY_DIR, `${id}.json`);
+    if (!fs.existsSync(runPath)) return res.status(404).json({ ok: false, error: 'Run not found' });
+    res.type('json').send(fs.readFileSync(runPath, 'utf8'));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 

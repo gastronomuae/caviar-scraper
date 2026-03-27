@@ -85,6 +85,8 @@
   <main>
     <div class="row">
       <button type="button" onclick="load()">Refresh</button>
+      <label class="meta" for="run-select">Run:</label>
+      <select id="run-select" onchange="loadSelectedRun(this.value)" style="background:#0f1419;color:#e7ecf3;border:1px solid #3d4f6f;border-radius:6px;padding:6px 8px;min-width:280px;"></select>
       <a class="meta" href="/api/automation/last-run.txt" target="_blank" rel="noopener noreferrer">Open text log</a>
       <a class="meta" href="/api/automation/last-run" target="_blank" rel="noopener noreferrer">Open JSON</a>
       <span class="meta" id="status"></span>
@@ -108,6 +110,8 @@
   </main>
 
   <script>
+    let runHistoryEntries = [];
+
     function escapeHtml(t) {
       const d = document.createElement('div');
       d.textContent = t == null ? '' : String(t);
@@ -129,6 +133,7 @@
               <th>Handle</th>
               <th>Shopify product</th>
               <th>Applied</th>
+              <th>Changes</th>
               <th>Auto-activated?</th>
             </tr>
           </thead>
@@ -137,6 +142,18 @@
               const a = i.applied || {};
               const applied = a
                 ? `${a.bulk_update_rows ?? 0} updates, ${a.inventory_rows ?? 0} inventory, ${a.option_values_added ?? 0} option values, ${a.reorder_moved_rows ?? 0} reorders`
+                : '—';
+              const changes = Array.isArray(i.variant_changes) ? i.variant_changes : [];
+              const changedText = changes.length
+                ? changes
+                    .map((c) => {
+                      const weight = `${c.grams ?? '?'}g`;
+                      const price = `${c.price_from ?? '—'} -> ${c.price_to ?? '—'}`;
+                      const qty = `${c.qty_from ?? '—'} -> ${c.qty_to ?? '—'}`;
+                      const policy = `${c.inventory_policy_from ?? '—'} -> ${c.inventory_policy_to ?? '—'}`;
+                      return `${weight}: price ${price}, qty ${qty}, policy ${policy}`;
+                    })
+                    .join(' | ')
                 : '—';
               return `
                 <tr>
@@ -147,6 +164,7 @@
                   <td><code>${escapeHtml(i.source_handle || '')}</code></td>
                   <td><code>${escapeHtml(i.shopify_product_id || '')}</code></td>
                   <td class="meta">${escapeHtml(applied)}</td>
+                  <td class="meta">${escapeHtml(changedText)}</td>
                   <td>${i.set_active_after_sync ? '<span class="pill ok">yes</span>' : '<span class="pill">no</span>'}</td>
                 </tr>
               `;
@@ -191,18 +209,7 @@
       `;
     }
 
-    async function load() {
-      const status = document.getElementById('status');
-      status.textContent = 'Loading…';
-      const res = await fetch('/api/automation/last-run');
-      const text = await res.text();
-      if (!res.ok) {
-        status.textContent = '';
-        document.getElementById('summary').innerHTML = `<div><strong>No report</strong></div><div class="meta" style="margin-top:8px;">${escapeHtml(text)}</div>`;
-        document.getElementById('tbl').innerHTML = '<div class="meta">—</div>';
-        return;
-      }
-      const run = JSON.parse(text);
+    function renderRun(run) {
       const c = run.counts || {};
       document.getElementById('hdr').textContent = run.started_at ? `Started ${run.started_at}` : '';
       document.getElementById('summary').innerHTML = `
@@ -214,6 +221,52 @@
           Variant sync OK: <code>${escapeHtml(String(c.variant_sync_ok ?? 0))}</code> (failed <code>${escapeHtml(String(c.variant_sync_failed ?? 0))}</code>)
         </div>
       `;
+      const step = findStep(run, 'variant_sync_mapped_updates');
+      const items = Array.isArray(step?.ok_items) ? step.ok_items : [];
+      document.getElementById('synced-meta').textContent = `Targets: ${step?.targets ?? 0} · OK: ${items.length} · Failed: ${step?.failed_count ?? 0}`;
+      document.getElementById('tbl').innerHTML = table(items);
+    }
+
+    function renderRunSelect(entries, selectedId) {
+      const sel = document.getElementById('run-select');
+      const arr = Array.isArray(entries) ? entries : [];
+      sel.innerHTML = arr
+        .map((e) => {
+          const id = String(e.id || '');
+          const txt = `${e.started_at || id} ${e.ok ? 'OK' : 'FAILED'}`;
+          const selected = id === selectedId ? ' selected' : '';
+          return `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(txt)}</option>`;
+        })
+        .join('');
+    }
+
+    async function loadSelectedRun(runId) {
+      const status = document.getElementById('status');
+      if (!runId) return;
+      status.textContent = 'Loading run…';
+      const res = await fetch('/api/automation/history/' + encodeURIComponent(runId));
+      const text = await res.text();
+      if (!res.ok) {
+        status.textContent = '';
+        document.getElementById('summary').innerHTML = `<div><strong>Run not found</strong></div><div class="meta" style="margin-top:8px;">${escapeHtml(text)}</div>`;
+        return;
+      }
+      const run = JSON.parse(text);
+      renderRun(run);
+      status.textContent = '';
+    }
+
+    async function load() {
+      const status = document.getElementById('status');
+      status.textContent = 'Loading…';
+      const hRuns = await fetch('/api/automation/history?limit=30');
+      const jRuns = await hRuns.json();
+      runHistoryEntries = Array.isArray(jRuns?.entries) ? jRuns.entries : [];
+      const selected = runHistoryEntries[0]?.id || '';
+      renderRunSelect(runHistoryEntries, selected);
+      if (selected) {
+        await loadSelectedRun(selected);
+      }
 
       // Supplier delta history table (dynamics over time)
       try {
@@ -227,10 +280,6 @@
         document.getElementById('supplier-delta-history-table').innerHTML = '<div class="meta" style="margin-top:10px;">—</div>';
       }
 
-      const step = findStep(run, 'variant_sync_mapped_updates');
-      const items = Array.isArray(step?.ok_items) ? step.ok_items : [];
-      document.getElementById('synced-meta').textContent = `Targets: ${step?.targets ?? 0} · OK: ${items.length} · Failed: ${step?.failed_count ?? 0}`;
-      document.getElementById('tbl').innerHTML = table(items);
       status.textContent = '';
     }
 
