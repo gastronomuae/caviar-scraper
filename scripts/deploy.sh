@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -euo pipefail
+set -eo pipefail
 
 # Deploy caviar-scraper (caviar.gastronom.ae)
 cd /home/fullevqf/caviar-scraper
