@@ -26,13 +26,30 @@ function loadOptionalEnv() {
 
 loadOptionalEnv();
 
-const PORT = Number(process.env.PORT || process.env.REVIEW_PORT || 3001);
+// Use UBAZAR_SERVER_URL env var to target the correct server.
+// On LiteSpeed/Passenger (cPanel), apps communicate via Unix sockets so
+// localhost:PORT is not reachable from cron — use the public HTTPS URL instead.
+const SERVER_URL = (process.env.UBAZAR_SERVER_URL || '').replace(/\/$/, '') ||
+  (() => {
+    const port = Number(process.env.PORT || process.env.REVIEW_PORT || 0);
+    return port ? `http://localhost:${port}` : 'http://localhost:3001';
+  })();
 
-function postJson(port, path) {
+function postJson(targetUrl) {
   return new Promise((resolve, reject) => {
     const body = '{}';
-    const req = http.request(
-      { hostname: 'localhost', port, path, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+    const url = new URL(targetUrl);
+    const isHttps = url.protocol === 'https:';
+    const transport = isHttps ? require('https') : http;
+    const req = transport.request(
+      {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        rejectUnauthorized: false
+      },
       (res) => {
         let data = '';
         res.on('data', (chunk) => { data += chunk; });
@@ -68,10 +85,11 @@ function buildText(run) {
 }
 
 (async () => {
-  console.log(`[ubazar-cron] Calling POST http://localhost:${PORT}/api/ubazar/run ...`);
+  const endpoint = `${SERVER_URL}/api/ubazar/run`;
+  console.log(`[ubazar-cron] Calling POST ${endpoint} ...`);
   let result;
   try {
-    result = await postJson(PORT, '/api/ubazar/run');
+    result = await postJson(endpoint);
   } catch (e) {
     console.error(`[ubazar-cron] HTTP request failed: ${String(e.message || e)}`);
     process.exit(1);

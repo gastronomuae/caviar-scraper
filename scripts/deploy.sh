@@ -4,7 +4,9 @@ set -eo pipefail
 
 # Deploy caviar-scraper (caviar.gastronom.ae)
 cd /home/fullevqf/caviar-scraper
-git pull
+git fetch origin
+git checkout -- . 2>/dev/null || true
+git reset --hard origin/main
 
 source /home/fullevqf/nodevenv/caviar-scraper/20/bin/activate
 npm install
@@ -20,7 +22,9 @@ if [ -d /home/fullevqf/ubazar-scraper ]; then
   (
     set +e
     cd /home/fullevqf/ubazar-scraper
-    git pull
+    git fetch origin
+    git checkout -- . 2>/dev/null || true
+    git reset --hard origin/main
 
     # Use caviar virtualenv (same Node version) — ubazar may not have its own yet.
     if [ -f /home/fullevqf/nodevenv/ubazar-scraper/20/bin/activate ]; then
