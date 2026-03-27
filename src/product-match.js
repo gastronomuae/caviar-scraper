@@ -7,8 +7,8 @@ const PATHS = {
   supplierLatest: path.join(ROOT, 'Output/products_all.latest.json'),
   shopifyPrimary: path.join(ROOT, 'Output/from_gastronom.json'),
   shopifyFallback: path.join(ROOT, 'Output/shopify_from_gastronom.json'),
-  mapping: path.join(ROOT, 'Output/product_mapping.json'),
-  state: path.join(ROOT, 'Output/match_review_state.json'),
+  mapping: path.join(ROOT, 'data/product_mapping.json'),
+  state: path.join(ROOT, 'data/match_review_state.json'),
   reportCsv: path.join(ROOT, 'Output/matching_report.csv')
 };
 
