@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UBazar ↔ Gastronom match</title>
+  <style>
+    :root { --bg:#0f1419; --panel:#1a2332; --text:#e7ecf3; --muted:#8b9bb4; --accent:#3d8bfd; --ok:#3fb950; --warn:#d4a72c; --bad:#f85149; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:system-ui, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:12px 20px; border-bottom:1px solid #2d3a4f; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    h1 { margin:0; font-size:1rem; }
+    button { background:var(--panel); color:var(--text); border:1px solid #3d4f6f; border-radius:6px; padding:8px 14px; cursor:pointer; }
+    button:hover { border-color:var(--accent); }
+    button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+    button.danger { border-color:var(--bad); color:#fff; background:#3d2020; }
+    .meta { color:var(--muted); font-size:0.9rem; }
+    .status { display:inline-block; padding:3px 9px; border-radius:999px; font-size:0.78rem; border:1px solid #3d4f6f; }
+    .ok { border-color:var(--ok); color:var(--ok); }
+    .warn { border-color:var(--warn); color:var(--warn); }
+    .bad { border-color:var(--bad); color:var(--bad); }
+    main { max-width:1260px; margin:0 auto; padding:16px; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+    .grid { display:grid; gap:16px; grid-template-columns:1fr 1fr; }
+    @media (max-width:900px){ .grid{grid-template-columns:1fr;} }
+    .panel { background:var(--panel); border:1px solid #2d3a4f; border-radius:10px; padding:14px; min-height:220px; }
+    .line { margin:6px 0; }
+    .cards .card { border:1px solid #2d3a4f; border-radius:8px; padding:10px; margin-bottom:10px; cursor:pointer; }
+    .cards .card.selected { border-color:var(--ok); box-shadow:0 0 0 1px var(--ok); }
+    .cards .card:hover { border-color:var(--accent); }
+    .score { font-size:0.82rem; color:var(--accent); }
+    .modal-bg { display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); z-index:100; align-items:center; justify-content:center; padding:20px; }
+    .modal-bg.open { display:flex; }
+    .modal { width:100%; max-width:760px; background:var(--panel); border:1px solid #2d3a4f; border-radius:10px; padding:14px; max-height:80vh; overflow:auto; }
+    input { width:100%; background:#0f1419; color:var(--text); border:1px solid #3d4f6f; border-radius:6px; padding:9px 10px; }
+    .hit { padding:9px 8px; border-bottom:1px solid #2d3a4f; cursor:pointer; }
+    .hit:hover { background:#243044; }
+    .actions-inline { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>UBazar ↔ Gastronom matching</h1>
+    <a href="/ubazar-report" class="meta">UBazar report</a>
+    <span style="flex:1 1 auto;"></span>
+    <a href="/" class="meta">Back to dashboard</a>
+  </header>
+  <main>
+    <div class="row">
+      <button onclick="prev()">← Previous</button>
+      <button onclick="next()">Next →</button>
+      <span class="meta" id="idx">Product 0 / 0</span>
+      <span style="flex:1 1 auto;"></span>
+      <button onclick="setFilter('no_match')" class="danger" id="f-no">No match</button>
+      <button onclick="setFilter('needs_review')" id="f-rev">Needs review</button>
+      <button onclick="setFilter('confirmed')" id="f-ok">Confirmed</button>
+      <button onclick="setFilter('all')" id="f-all">All</button>
+    </div>
+    <div class="row">
+      <button onclick="load()">Refresh</button>
+      <span class="meta" id="status"></span>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <div class="line meta">SUPPLIER (UBAZAR)</div>
+        <div id="left"></div>
+      </div>
+      <div class="panel">
+        <div class="line meta">GASTRONOM SUGGESTIONS</div>
+        <div id="right" class="cards"></div>
+        <div class="actions-inline">
+          <button type="button" class="primary" onclick="confirmSelected()">✅ Confirm match</button>
+          <button type="button" class="danger" onclick="markNoMatch()">❌ No match</button>
+          <button type="button" onclick="openSearch()">🔍 Search manually</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal-bg" id="search-modal">
+    <div class="modal">
+      <div class="row"><strong>Search Gastronom</strong><span style="flex:1 1 auto;"></span><button onclick="closeSearch()">Close</button></div>
+      <input id="q" type="search" placeholder="Name or handle..." />
+      <div id="hits"></div>
+    </div>
+  </div>
+
+  <script>
+    let rowsAll = [], rows = [], idx = 0, selectedHandle = null, manualPick = null, filter='needs_review', hits = [];
+    function esc(t){const d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML;}
+    function badge(s){const x=String(s||''); if(x.includes('confirmed')) return 'ok'; if(x.includes('no match')) return 'bad'; return 'warn';}
+    function setFilter(f){filter=f; document.getElementById('f-no').classList.toggle('primary',f==='no_match'); document.getElementById('f-rev').classList.toggle('primary',f==='needs_review'); document.getElementById('f-ok').classList.toggle('primary',f==='confirmed'); document.getElementById('f-all').classList.toggle('primary',f==='all'); applyFilter();}
+    function applyFilter(){ const isN=(r)=>String(r.status).includes('no match'); const isR=(r)=>String(r.status).includes('needs review'); const isC=(r)=>String(r.status).includes('confirmed'); if(filter==='no_match') rows=rowsAll.filter(isN); else if(filter==='needs_review') rows=rowsAll.filter(isR); else if(filter==='confirmed') rows=rowsAll.filter(isC); else rows=rowsAll; idx=Math.min(idx,Math.max(0,rows.length-1)); render(); }
+    async function load(){
+      const st=document.getElementById('status'); st.textContent='Loading…';
+      try{
+        const r=await fetch('/api/ubazar/report'); const t=await r.text(); if(!r.ok) throw new Error(t||`HTTP ${r.status}`);
+        const j=JSON.parse(t); rowsAll=j.rows||[]; applyFilter(); st.textContent='';
+      }catch(e){ st.textContent=String(e.message||e); rowsAll=[]; rows=[]; render(); }
+    }
+    function render(){
+      const r=rows[idx];
+      document.getElementById('idx').textContent = `Product ${rows.length?idx+1:0} / ${rows.length}`;
+      if(!r){
+        document.getElementById('left').innerHTML='<div class="meta">No rows for current filter. Try `Needs review` or `All`.</div>';
+        document.getElementById('right').innerHTML='<div class="meta">—</div>';
+        return;
+      }
+      const s=r.supplier||{};
+      document.getElementById('left').innerHTML = `
+        <div class="line"><span class="status ${badge(r.status)}">${esc(r.status)}</span></div>
+        <div class="line"><strong>${esc(s.name||'')}</strong></div>
+        <div class="line meta">${esc(s.handle||'')}</div>
+        <div class="line">Price: ${Number.isFinite(Number(s.promotional_price))?Number(s.promotional_price).toFixed(2):'—'} AED</div>
+        <div class="line">Availability: ${s.available===true?'in stock':s.available===false?'not available':'unknown'}</div>
+        <div class="line">${s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">open</a>`:'—'}</div>
+      `;
+      let cards = [];
+      if(manualPick){
+        cards.push(`<div class="card selected" data-h="${esc(manualPick.handle||'')}" onclick="selectCard(this)">
+          <div><strong>${esc(manualPick.name||'')}</strong></div>
+          <div class="meta">${esc(manualPick.handle||'')}</div>
+          <div class="score">manual search</div>
+        </div>`);
+        selectedHandle = manualPick.handle || null;
+      } else {
+        selectedHandle = null;
+      }
+      cards.push(...(r.suggestions||[]).map((g,i)=>`<div class="card" data-h="${esc(g.handle||'')}" onclick="selectCard(this)">
+        <div><strong>${esc(g.name||'')}</strong></div>
+        <div class="meta">${esc(g.handle||'')}</div>
+        <div class="score">score: ${esc(g.score??0)}</div>
+        <div class="meta">${Number.isFinite(Number(g.price))?Number(g.price).toFixed(2)+' AED':'—'} · ${g.available===false?'not available':'in stock'}</div>
+      </div>`));
+      document.getElementById('right').innerHTML = cards.join('') || '<div class="meta">No suggestions</div>';
+      // auto-select confirmed mapped item if present
+      if (r.mapped_handle && !manualPick) {
+        const el = [...document.querySelectorAll('#right .card')].find((x)=>x.dataset.h===r.mapped_handle);
+        if (el) selectCard(el);
+      } else if (!manualPick) {
+        const first = document.querySelector('#right .card');
+        if (first) selectCard(first);
+      }
+    }
+    function selectCard(el){ [...document.querySelectorAll('#right .card')].forEach(c=>c.classList.remove('selected')); el.classList.add('selected'); selectedHandle = el.dataset.h || null; }
+    function prev(){ if(idx>0){ manualPick=null; idx--; render(); } }
+    function next(){ if(idx<rows.length-1){ manualPick=null; idx++; render(); } }
+    async function confirmSelected(){
+      const r=rows[idx]; if(!r||!selectedHandle) return alert('Select a Gastronom card first');
+      const res=await fetch('/api/ubazar/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_handle:r.supplier.handle,gastronom_handle:selectedHandle})});
+      if(!res.ok) return alert(await res.text());
+      manualPick=null; await load();
+    }
+    async function markNoMatch(){
+      const r=rows[idx]; if(!r) return;
+      await fetch('/api/ubazar/no-match',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_handle:r.supplier.handle})});
+      manualPick=null; await load();
+    }
+    function openSearch(){ document.getElementById('search-modal').classList.add('open'); document.getElementById('q').focus(); }
+    function closeSearch(){ document.getElementById('search-modal').classList.remove('open'); }
+    document.getElementById('q').addEventListener('input', async (e)=>{
+      const q=String(e.target.value||'').trim(); const box=document.getElementById('hits'); if(q.length<2){ box.innerHTML=''; hits=[]; return; }
+      const r=await fetch('/api/ubazar/search?q='+encodeURIComponent(q)); const j=await r.json(); hits=Array.isArray(j)?j:[];
+      box.innerHTML = hits.map((h,i)=>`<div class="hit" onclick="pick(${i})"><strong>${esc(h.name||'')}</strong><br/><span class="meta">${esc(h.handle||'')}</span></div>`).join('');
+    });
+    function pick(i){ const h=hits[i]; if(!h) return; manualPick={...h}; closeSearch(); render(); }
+    setFilter('needs_review');
+    load();
+  </script>
+</body>
+</html>
+

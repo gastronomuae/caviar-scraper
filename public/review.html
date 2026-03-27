@@ -302,10 +302,10 @@
 </head>
 <body>
   <header>
-    <h1>Supplier ↔ Gastronom</h1>
-    <button type="button" onclick="showUnpairedGastronom()">Gastronom: not on supplier</button>
-    <button type="button" onclick="showUnpairedSupplier()">1-caviar: not in Gastronom</button>
-    <button type="button" onclick="window.location.href='/supplier-delta'">Supplier delta</button>
+    <h1 id="hdr-title">Supplier ↔ Gastronom</h1>
+    <button type="button" id="btn-unpaired-gastronom" onclick="showUnpairedGastronom()">Gastronom: not on supplier</button>
+    <button type="button" id="btn-unpaired-supplier" onclick="showUnpairedSupplier()">1-caviar: not in Gastronom</button>
+    <button type="button" id="btn-supplier-delta" onclick="window.location.href='/supplier-delta'">Supplier delta</button>
     <button type="button" id="btn-sync-gastronom" title="Same as npm run sync:gastronom — refreshes Output/from_gastronom.json from Shopify" onclick="fetchGastronomFromShopify(this)">Fetch Gastronom from Shopify</button>
     <button type="button" id="btn-run-automation" class="primary" title="Runs: sync Gastronom → supplier scan+snapshot+publish → draft unpaired ACTIVE → sync mapped updates" onclick="runDailyAutomation(this)">Run daily automation</button>
   </header>
@@ -324,7 +324,7 @@
     <div id="status-bar"></div>
     <div class="grid">
       <div class="panel">
-        <h2>Supplier (1-caviar) <span id="supplier-card-status"></span></h2>
+        <h2 id="supplier-panel-title">Supplier (1-caviar) <span id="supplier-card-status"></span></h2>
         <div id="supplier-block"></div>
       </div>
       <div class="panel">
@@ -383,9 +383,8 @@
       </div>
       <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
         <button type="button" onclick="loadLastAutomationReport()">Refresh report</button>
-        <a class="meta" href="/automation-report" target="_blank" rel="noopener noreferrer">Open table view</a>
-        <a class="meta" href="/api/automation/last-run.txt" target="_blank" rel="noopener noreferrer">Open as text</a>
-        <a class="meta" href="/api/automation/last-run" target="_blank" rel="noopener noreferrer">Open as JSON</a>
+        <a class="meta" id="automation-report-table-link" href="/automation-report" target="_blank" rel="noopener noreferrer">Open table view</a>
+        <a class="meta" id="automation-report-json-link" href="/api/automation/last-run" target="_blank" rel="noopener noreferrer">Open as JSON</a>
       </div>
       <pre id="automation-log" style="font-size:12px; overflow:auto; max-height:65vh; white-space:pre-wrap;"></pre>
     </div>
@@ -393,6 +392,19 @@
 
   <script>
     const REVIEW_PORT = '3001';
+    const modeParam = new URLSearchParams(location.search).get('mode');
+    const MODE = modeParam === 'ubazar' ? 'ubazar' : 'default';
+    try {
+      const stored = localStorage.getItem('match_mode');
+      if (!modeParam && stored === 'ubazar') {
+        // Prevent accidental drop back to caviar mode when user opens "/" directly.
+        location.replace(location.pathname + '?mode=ubazar');
+      } else {
+        localStorage.setItem('match_mode', MODE);
+      }
+    } catch (_) {
+      // ignore
+    }
     /** When the page is opened from Live Server or another port, API still targets the review server. */
     function apiOrigin() {
       if (location.port === REVIEW_PORT) return '';
@@ -402,9 +414,22 @@
       return '';
     }
     const API = apiOrigin();
+    const ENDPOINTS = MODE === 'ubazar'
+      ? {
+          report: '/api/ubazar/report',
+          confirm: '/api/ubazar/confirm',
+          noMatch: '/api/ubazar/no-match',
+          search: '/api/gastronom/uzbek-search'
+        }
+      : {
+          report: '/api/report',
+          confirm: '/api/confirm',
+          noMatch: '/api/no-match',
+          search: '/api/search'
+        };
 
     /** @type {'no_match'|'needs_review'|'confirmed'|'all'} */
-    let filterMode = 'no_match';
+    let filterMode = MODE === 'ubazar' ? 'needs_review' : 'no_match';
     /** Unfiltered report rows from /api/report */
     let rowsAll = [];
     let rows = [];
@@ -524,8 +549,14 @@
 
       document.getElementById('supplier-block').innerHTML = `
         ${s.image ? `<img class="supplier-img" src="${escapeAttr(s.image)}" alt="" />` : '<p class="meta">No image</p>'}
-        <div class="line"><strong>Name</strong> ${escapeHtml(s.name_en)}</div>
+        <div class="line"><strong>Name</strong> ${escapeHtml(s.name_en || s.name || '')}</div>
         <div class="line"><strong>Handle</strong> ${escapeHtml(s.handle)}</div>
+        ${
+          (!Array.isArray(s.raw?.variants) || s.raw.variants.length === 0)
+            ? `<div class="line"><strong>Weight</strong> ${escapeHtml(parseWeightFromText(s.name_en || s.name || s.handle || '') || '—')}</div>
+               <div class="line"><strong>Price</strong> ${escapeHtml(formatPriceMaybeAED(s.promotional_price ?? s.regular_price))}</div>`
+            : ''
+        }
         ${renderVariantsTable({ title: 'Supplier variants', variants: s.raw?.variants || [], kind: 'supplier', limit: 6 })}
       `;
 
@@ -545,8 +576,14 @@
           <div class="match-card selected" data-i="manual" data-gid="${escapeAttr(m.shopify_product_id || '')}" onclick="selectMatch(this)">
             <div class="line" style="color:var(--accent);font-size:0.8rem;margin-bottom:8px;">Manual search — click Confirm when ready</div>
             ${m.image ? `<img class="match-img" src="${escapeAttr(m.image)}" alt="" />` : ''}
-            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)} ${productStatusBadge(m)}</div>
+            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru || m.name || '')} ${productStatusBadge(m)}</div>
             <div class="line"><strong>Handle</strong> ${escapeHtml(m.handle)}</div>
+            ${
+              (!Array.isArray(m.raw?.variants) || m.raw.variants.length === 0)
+                ? `<div class="line"><strong>Weight</strong> ${escapeHtml(parseWeightFromText(m.name_ru || m.name || m.handle || '') || '—')}</div>
+                   <div class="line"><strong>Price</strong> ${escapeHtml(formatPriceMaybeAED(m.price))}</div>`
+                : ''
+            }
             ${scoreHtml}
             ${renderVariantsTable({
               title: 'Gastronom variants',
@@ -579,8 +616,14 @@
           return `
           <div class="match-card" data-i="${i}" data-gid="${escapeAttr(m.shopify_product_id || '')}" onclick="selectMatch(this)">
             ${m.image ? `<img class="match-img" src="${escapeAttr(m.image)}" alt="" />` : ''}
-            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru)} ${productStatusBadge(m)}</div>
+            <div class="line"><strong>Name</strong> ${escapeHtml(m.name_ru || m.name || '')} ${productStatusBadge(m)}</div>
             <div class="line"><strong>Handle</strong> ${escapeHtml(m.handle)}</div>
+            ${
+              (!Array.isArray(m.raw?.variants) || m.raw.variants.length === 0)
+                ? `<div class="line"><strong>Weight</strong> ${escapeHtml(parseWeightFromText(m.name_ru || m.name || m.handle || '') || '—')}</div>
+                   <div class="line"><strong>Price</strong> ${escapeHtml(formatPriceMaybeAED(m.price))}</div>`
+                : ''
+            }
             ${scoreHtml}
             ${renderVariantsTable({
               title: 'Gastronom variants',
@@ -604,6 +647,20 @@
     }
     function escapeAttr(t) {
       return String(t == null ? '' : t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    }
+    function parseWeightFromText(text) {
+      const t = String(text || '');
+      const m = t.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|кг|г)\b/i);
+      if (!m) return null;
+      const n = String(m[1]).replace(',', '.');
+      const u = String(m[2] || '').toLowerCase();
+      const unit = u === 'kg' || u === 'кг' ? 'kg' : 'g';
+      return `${n} ${unit}`;
+    }
+    function formatPriceMaybeAED(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '—';
+      return `${n.toFixed(2)} AED`;
     }
     /** gid://shopify/Product/8862819123369 → 8862819123369 */
     function shopifyNumericProductId(gid) {
@@ -787,7 +844,8 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             source_handle: r.supplier.handle,
-            shopify_product_id: gid
+            shopify_product_id: gid,
+            supplier_mode: MODE === 'ubazar' ? 'ubazar' : 'caviar'
           })
         });
         const text = await res.text();
@@ -799,6 +857,7 @@
         }
         if (!res.ok || !j?.ok) throw new Error(j?.error || text || 'Failed');
         const a = j.applied || {};
+        const refreshedGid = String(j.shopify_product_id || gid).trim();
         const activeNote = j.set_active_after_sync
           ? ' Product set to ACTIVE (was DRAFT; at least one variant is sellable).'
           : '';
@@ -807,8 +866,28 @@
           false
         );
         try {
-          await refreshGastronomRowFromShopify(gid);
-          render();
+          if (MODE === 'ubazar') {
+            // UBazar cards use handle as identifier; patch visible card from sync "after" result.
+            const after = j.after || null;
+            const cur = rows[idx];
+            const targetHandle = String(gid || '').trim(); // in ubazar mode gid == handle
+            const patchCard = (obj) => {
+              if (!obj) return;
+              obj.product_status = after?.product_status || obj.product_status || null;
+              if (after?.price != null) obj.price = after.price;
+              if (after?.inventory_policy) obj.inventory_policy = after.inventory_policy;
+              if (after?.inventory_quantity != null) obj.inventory_quantity = after.inventory_quantity;
+            };
+            if (manualPick && String(manualPick.handle || '').trim() === targetHandle) patchCard(manualPick);
+            if (cur && Array.isArray(cur.suggestions)) {
+              const hit = cur.suggestions.find((x) => String(x?.handle || '').trim() === targetHandle) || null;
+              patchCard(hit);
+            }
+            render();
+          } else {
+            await refreshGastronomRowFromShopify(refreshedGid);
+            render();
+          }
         } catch (re) {
           showInventoryFlash(
             `Synced OK; card refresh failed: ${String(re.message || re)}. Run npm run sync:gastronom or reload the page.`,
@@ -941,7 +1020,7 @@
       const reset = opts.reset === true;
       const bar = document.getElementById('status-bar');
       try {
-        const res = await fetch(API + '/api/report');
+        const res = await fetch(API + ENDPOINTS.report);
         const raw = await res.text();
         if (!res.ok) {
           bar.innerHTML = `<span class="status-badge st-none">Report failed (${res.status}). Is the review server running? Open <code>http://localhost:${REVIEW_PORT}</code> from the same machine. ${escapeHtml(raw.slice(0, 280))}</span>`;
@@ -953,7 +1032,7 @@
         try {
           data = JSON.parse(raw);
         } catch (parseErr) {
-          bar.innerHTML = `<span class="status-badge st-none">Bad JSON from /api/report. ${escapeHtml(String(parseErr.message))}</span>`;
+          bar.innerHTML = `<span class="status-badge st-none">Bad JSON from ${escapeHtml(ENDPOINTS.report)}. ${escapeHtml(String(parseErr.message))}</span>`;
           rowsAll = [];
           rows = [];
           return;
@@ -1020,26 +1099,40 @@
         alert('Select a Gastronom card first (click a suggestion).');
         return;
       }
-      const res = await fetch(API + '/api/confirm', {
+      const payload = MODE === 'ubazar'
+        ? { source_handle: r.supplier.handle, gastronom_handle: selectedShopifyId }
+        : { source_handle: r.supplier.handle, shopify_product_id: selectedShopifyId };
+      const res = await fetch(API + ENDPOINTS.confirm, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_handle: r.supplier.handle, shopify_product_id: selectedShopifyId })
+        body: JSON.stringify(payload)
       });
       if (!res.ok) { alert(await res.text()); return; }
       manualPick = null;
-      await load({ advance: true });
+      // In UBazar mode we avoid auto-advance to reduce accidental mismatches.
+      await load({ advance: MODE !== 'ubazar' });
     }
 
     async function markNoMatch() {
       const r = rows[idx];
       if (!r) return;
-      await fetch(API + '/api/no-match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_handle: r.supplier.handle })
-      });
+      if (MODE === 'ubazar' && String(r.status || '').includes('confirmed')) {
+        // In UBazar mode, "No match" on a confirmed row should clear a wrong mapping (not permanently no-match it).
+        const res = await fetch(API + '/api/ubazar/clear-match', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_handle: r.supplier.handle })
+        });
+        if (!res.ok) { alert(await res.text()); return; }
+      } else {
+        await fetch(API + ENDPOINTS.noMatch, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_handle: r.supplier.handle })
+        });
+      }
       manualPick = null;
-      await load({ advance: true });
+      await load({ advance: MODE !== 'ubazar' });
     }
 
     function downloadCsv() {
@@ -1072,7 +1165,8 @@
           btn.disabled = true;
           btn.textContent = 'Drafting…';
         }
-        const res = await fetch(API + '/api/unpaired-gastronom/draft-active', {
+        const endpoint = MODE === 'ubazar' ? '/api/ubazar/unpaired-gastronom/draft-active' : '/api/unpaired-gastronom/draft-active';
+        const res = await fetch(API + endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: '{}'
@@ -1111,33 +1205,37 @@
       sum.textContent = '';
       document.getElementById('unpaired-modal').classList.add('open');
       try {
-        const res = await fetch(API + '/api/unpaired-gastronom');
+        const res = await fetch(API + (MODE === 'ubazar' ? '/api/ubazar/unpaired-gastronom' : '/api/unpaired-gastronom'));
         if (res.status === 404) {
           throw new Error(
-            'Route missing (/api/unpaired-gastronom) — restart npm run review from the project folder. Open http://localhost:' +
+            'Route missing — restart npm run review from the project folder. Open http://localhost:' +
               REVIEW_PORT +
               ' .'
           );
         }
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        sum.innerHTML =
-          (data.unpaired_gastronom_scope === 'full_products_all'
-            ? `Supplier rows (full <code>products_all</code> — set by env): <strong>${data.supplier_product_count}</strong> · `
-            : `Supplier rows (caviar/seafood, same as main list): <strong>${data.supplier_product_count}</strong> · `) +
-          `Unpaired Gastronom rows: <strong>${data.count}</strong> ` +
-          `(ACTIVE <strong>${data.active}</strong>, DRAFT <strong>${data.draft}</strong>). ` +
-          `Not linked = no shared handle with those supplier rows and no confirmed mapping from them. ` +
-          (data.unpaired_gastronom_scope !== 'full_products_all'
-            ? '<span style="font-size:0.8rem;">Tip: use env <code>UNPAIRED_GASTRONOM_FULL_SUPPLIER=1</code> to compare against all supplier URLs (legacy).</span>'
-            : '');
-        lastUnpairedActiveCount = Number(data.active) || 0;
-        if (actions) actions.style.display = lastUnpairedActiveCount > 0 ? 'flex' : 'none';
-        const list = [...(data.products || [])].sort((a, b) => {
-          const d = unpairedStatusOrder(a.status) - unpairedStatusOrder(b.status);
-          if (d !== 0) return d;
-          return String(a.name || '').localeCompare(String(b.name || ''), 'ru');
-        });
+        if (MODE === 'ubazar') {
+          sum.innerHTML =
+            `Gastronom rows (Uzbek collection): <strong>${data.gastronom_count ?? 0}</strong> · ` +
+            `Unpaired: <strong>${data.count ?? 0}</strong> (ACTIVE <strong>${data.active ?? 0}</strong>, DRAFT <strong>${data.draft ?? 0}</strong>).`;
+          lastUnpairedActiveCount = Number(data.active) || 0;
+          if (actions) actions.style.display = lastUnpairedActiveCount > 0 ? 'flex' : 'none';
+        } else {
+          sum.innerHTML =
+            (data.unpaired_gastronom_scope === 'full_products_all'
+              ? `Supplier rows (full <code>products_all</code> — set by env): <strong>${data.supplier_product_count}</strong> · `
+              : `Supplier rows (caviar/seafood, same as main list): <strong>${data.supplier_product_count}</strong> · `) +
+            `Unpaired Gastronom rows: <strong>${data.count}</strong> ` +
+            `(ACTIVE <strong>${data.active}</strong>, DRAFT <strong>${data.draft}</strong>). ` +
+            `Not linked = no shared handle with those supplier rows and no confirmed mapping from them. ` +
+            (data.unpaired_gastronom_scope !== 'full_products_all'
+              ? '<span style="font-size:0.8rem;">Tip: use env <code>UNPAIRED_GASTRONOM_FULL_SUPPLIER=1</code> to compare against all supplier URLs (legacy).</span>'
+              : '');
+          lastUnpairedActiveCount = Number(data.active) || 0;
+          if (actions) actions.style.display = lastUnpairedActiveCount > 0 ? 'flex' : 'none';
+        }
+        const list = [...(data.products || [])].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'));
         box.innerHTML = list
           .map(
             (p) => `
@@ -1146,7 +1244,7 @@
             <span class="status-badge ${statusBadgeClass(p.status)}">${escapeHtml(p.status)}</span>
             <div class="title">${escapeHtml(p.name)}</div>
             <div class="handle">${escapeHtml(p.handle)}</div>
-            <div class="handle" style="font-size:0.72rem;">${escapeHtml(shopifyNumericProductId(p.shopify_product_id))}</div>
+            ${p.shopify_product_id ? `<div class="handle" style="font-size:0.72rem;">${escapeHtml(shopifyNumericProductId(p.shopify_product_id))}</div>` : ''}
           </div>
         `
           )
@@ -1164,7 +1262,7 @@
       sum.textContent = '';
       document.getElementById('supplier-unpaired-modal').classList.add('open');
       try {
-        const res = await fetch(API + '/api/unpaired-supplier');
+        const res = await fetch(API + (MODE === 'ubazar' ? '/api/ubazar/unpaired-supplier' : '/api/unpaired-supplier'));
         if (res.status === 404) {
           throw new Error(
             'Route missing — restart npm run review from the project folder (needs /api/unpaired-supplier).'
@@ -1172,14 +1270,17 @@
         }
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        sum.innerHTML =
-          'In-scope supplier rows (caviar/seafood filter): <strong>' +
-          data.supplier_product_count +
-          '</strong> · ' +
-          'Not in Gastronom export (no shared handle, no mapping to a GID in from_gastronom.json): <strong>' +
-          data.count +
-          '</strong>. ' +
-          'Click an image to open the product on 1-caviar.ae in a new tab.';
+        sum.innerHTML = MODE === 'ubazar'
+          ? ('UBazar rows: <strong>' + (data.supplier_product_count ?? 0) + '</strong> · ' +
+            'Not linked: <strong>' + (data.count ?? 0) + '</strong> ' +
+            '(Needs review <strong>' + (data.counts?.needs_review ?? 0) + '</strong>, No match <strong>' + (data.counts?.no_match ?? 0) + '</strong>).')
+          : ('In-scope supplier rows (caviar/seafood filter): <strong>' +
+            data.supplier_product_count +
+            '</strong> · ' +
+            'Not in Gastronom export (no shared handle, no mapping to a GID in from_gastronom.json): <strong>' +
+            data.count +
+            '</strong>. ' +
+            'Click an image to open the product on 1-caviar.ae in a new tab.');
         const list = data.products || [];
         box.innerHTML = list
           .map((p) => {
@@ -1196,6 +1297,7 @@
             return (
               '<div class="unpaired-card">' +
               imgHtml +
+              (MODE === 'ubazar' && p.status ? '<span class="status-badge ' + (String(p.status).includes('NO MATCH') ? 'st-none' : 'st-review') + '">' + escapeHtml(p.status) + '</span>' : '') +
               '<div class="title">' +
               escapeHtml(p.name) +
               '</div>' +
@@ -1303,6 +1405,73 @@
       }
     }
 
+    async function runUbazarPipeline(btn) {
+      const el = btn || document.getElementById('btn-unpaired-supplier');
+      const prev = el ? el.textContent : '';
+      try {
+        if (el) {
+          el.disabled = true;
+          el.textContent = 'Running…';
+        }
+        const res = await fetch(API + '/api/ubazar/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        const text = await res.text();
+        let j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (_) {}
+        if (!res.ok || !j?.ok) throw new Error(j?.error || (j?.errors||[]).join(' | ') || text || `HTTP ${res.status}`);
+        const c = j.counts || {};
+        showInventoryFlash(
+          `UBazar pipeline OK. Products: ${c.ubazar_latest_products ?? 0}. Delta +${c.supplier_delta_added ?? 0}/~${c.supplier_delta_updated ?? 0}/-${c.supplier_delta_removed ?? 0}. Activated: ${c.mapped_activated ?? 0}. Drafted unpaired: ${c.drafted_unpaired_gastronom ?? 0}. Sync OK: ${c.variant_sync_ok ?? 0}.`,
+          false
+        );
+        await load();
+        await loadLastAutomationReport(j);
+      } catch (e) {
+        showInventoryFlash(`UBazar pipeline: ${String(e.message || e)}`, true);
+      } finally {
+        if (el) {
+          el.disabled = false;
+          el.textContent = prev || 'Run UBazar pipeline';
+        }
+      }
+    }
+
+    async function fetchGastronomUzbek(btn) {
+      const el = btn || document.getElementById('btn-run-automation');
+      const prev = el ? el.textContent : '';
+      try {
+        if (el) {
+          el.disabled = true;
+          el.textContent = 'Fetching…';
+        }
+        const res = await fetch(API + '/api/gastronom-uzbek/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        const text = await res.text();
+        let j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (_) {}
+        if (!res.ok || !j?.ok) throw new Error(j?.error || text || `HTTP ${res.status}`);
+        showInventoryFlash('Gastronom (Uzbek) refreshed.', false);
+        await load();
+      } catch (e) {
+        showInventoryFlash(`Fetch Gastronom (Uzbek): ${String(e.message || e)}`, true);
+      } finally {
+        if (el) {
+          el.disabled = false;
+          el.textContent = prev || 'Fetch Gastronom (Uzbek)';
+        }
+      }
+    }
+
     async function loadLastAutomationReport(prefetchedJson) {
       try {
         const modal = document.getElementById('automation-modal');
@@ -1312,16 +1481,66 @@
 
         let text = '';
         if (prefetchedJson) {
-          text = formatAutomationReport(prefetchedJson);
+          text = MODE === 'ubazar' ? formatUbazarAutomationReport(prefetchedJson) : formatAutomationReport(prefetchedJson);
         } else {
-          const res = await fetch(API + '/api/automation/last-run.txt');
-          text = await res.text();
-          if (!res.ok) throw new Error(text || 'Failed to load automation report');
+          if (MODE === 'ubazar') {
+            const res = await fetch(API + '/api/ubazar/automation/last-run');
+            const raw = await res.text();
+            if (!res.ok) throw new Error(raw || 'Failed to load UBazar automation report');
+            try { text = formatUbazarAutomationReport(JSON.parse(raw)); } catch (_) { text = raw; }
+          } else {
+            const res = await fetch(API + '/api/automation/last-run.txt');
+            text = await res.text();
+            if (!res.ok) throw new Error(text || 'Failed to load automation report');
+          }
         }
         pre.textContent = text;
       } catch (e) {
         showInventoryFlash(`Automation report: ${String(e.message || e)}`, true);
       }
+    }
+
+    function formatUbazarAutomationReport(j) {
+      const c = j?.counts || {};
+      const findStep = (name) =>
+        (Array.isArray(j?.steps) ? j.steps : []).find((s) => s && s.step === name) || null;
+      const delta = findStep('supplier_delta');
+      const syncStep = findStep('sync_mapped_products');
+      const lines = [];
+      lines.push('UBazar automation run');
+      lines.push(`Started:  ${j.started_at || '—'}`);
+      lines.push(`Finished: ${j.finished_at || '—'}`);
+      lines.push(`Result:   ${j.ok ? 'OK' : 'FAILED'}`);
+      lines.push('');
+      lines.push('Summary');
+      lines.push(`- UBazar catalog: ${c.ubazar_latest_products ?? 0} products scraped.`);
+      lines.push(`- Supplier delta vs previous snapshot: +${c.supplier_delta_added ?? 0} added, ~${c.supplier_delta_updated ?? 0} updated, -${c.supplier_delta_removed ?? 0} removed.`);
+      lines.push(`- Unpaired Gastronom products set to DRAFT: ${c.drafted_unpaired_gastronom ?? 0} (failed ${c.drafted_unpaired_failed ?? 0}).`);
+      lines.push(`- Mapped products activated (UBazar present): ${c.mapped_activated ?? 0}.`);
+      lines.push(`- Mapped products set to DRAFT (UBazar missing/unavailable): ${c.mapped_drafted ?? 0}.`);
+      lines.push(`- Variant sync (price + unlimited): OK ${c.variant_sync_ok ?? 0}, failed ${c.variant_sync_failed ?? 0}.`);
+      const synced = Array.isArray(syncStep?.synced) ? syncStep.synced : [];
+      if (synced.length) {
+        lines.push('');
+        lines.push('Synced products');
+        for (const s of synced) {
+          const after = s.after || {};
+          lines.push(`  ${s.source_handle} -> ${s.gastronom_handle}: status=${after.status ?? '?'} price=${after.price ?? '?'} policy=${after.inventoryPolicy ?? '?'}`);
+        }
+      }
+      const errs = j?.errors || [];
+      if (errs.length) {
+        lines.push('');
+        lines.push('Errors');
+        for (const e of errs) lines.push(`  - ${String(e)}`);
+      }
+      const warns = j?.warnings || [];
+      if (warns.length) {
+        lines.push('');
+        lines.push('Warnings');
+        for (const w of warns) lines.push(`  - ${String(w)}`);
+      }
+      return lines.join('\n');
     }
 
     function formatAutomationReport(j) {
@@ -1386,12 +1605,12 @@
       const q = e.target.value.trim();
       const box = document.getElementById('search-results');
       if (q.length < 2) { box.innerHTML = ''; lastSearchHits = []; return; }
-      const res = await fetch(API + '/api/search?q=' + encodeURIComponent(q));
+      const res = await fetch(API + ENDPOINTS.search + '?q=' + encodeURIComponent(q));
       const hits = await res.json();
       lastSearchHits = hits;
       box.innerHTML = hits.map((h, i) => `
         <div class="search-hit" data-idx="${i}" onclick="pickSearchHit(Number(this.dataset.idx))">
-          <strong>${escapeHtml(h.name_ru)}</strong><br/>
+          <strong>${escapeHtml(h.name_ru || h.name || '')}</strong><br/>
           <span class="meta">${escapeHtml(h.handle)} · ${escapeHtml(h.shopify_product_id || '')}</span>
         </div>
       `).join('');
@@ -1399,9 +1618,11 @@
 
     function pickSearchHit(i) {
       const hit = lastSearchHits[i];
-      if (!hit || !hit.shopify_product_id) return;
+      const selectedId = hit?.shopify_product_id || hit?.handle || null;
+      if (!hit || !selectedId) return;
       manualPick = {
         ...hit,
+        shopify_product_id: selectedId,
         score: '—',
         reason: 'manual_search'
       };
@@ -1410,6 +1631,46 @@
       document.getElementById('search-results').innerHTML = '';
       lastSearchHits = [];
       render();
+    }
+
+    if (MODE === 'ubazar') {
+      document.getElementById('hdr-title').textContent = 'UBazar ↔ Gastronom';
+      document.getElementById('supplier-panel-title').innerHTML = 'Supplier (UBazar) <span id="supplier-card-status"></span>';
+      const b1 = document.getElementById('btn-unpaired-gastronom');
+      if (b1) b1.textContent = 'Gastronom: not on supplier';
+      const b2 = document.getElementById('btn-unpaired-supplier');
+      if (b2) b2.textContent = '1-ubazar: not in Gastronom';
+      const b3 = document.getElementById('btn-supplier-delta');
+      if (b3) {
+        b3.style.display = '';
+        b3.textContent = 'Supplier delta';
+        b3.onclick = () => { window.open('/api/ubazar/delta', '_blank'); };
+      }
+      const b4 = document.getElementById('btn-sync-gastronom');
+      if (b4) {
+        b4.textContent = 'Fetch Gastronom from Shopify';
+        b4.title = 'Refresh Gastronom Uzbek collection used for matching suggestions';
+        b4.onclick = () => { fetchGastronomUzbek(b4); };
+      }
+      const b5 = document.getElementById('btn-run-automation');
+      if (b5) {
+        b5.classList.add('primary');
+        b5.textContent = 'Run daily automation';
+        b5.title = 'Run UBazar pipeline';
+        b5.onclick = () => { runUbazarPipeline(b5); };
+      }
+
+      // Modal titles to match UBazar wording.
+      const unpairedTitle = document.querySelector('#unpaired-modal h2');
+      if (unpairedTitle) unpairedTitle.textContent = 'Gastronom products not paired with supplier';
+      const supplierUnpairedTitle = document.querySelector('#supplier-unpaired-modal h2');
+      if (supplierUnpairedTitle) supplierUnpairedTitle.textContent = '1-ubazar.ae products not linked to Gastronom';
+
+      // Point automation report links to UBazar endpoints.
+      const tableLink = document.getElementById('automation-report-table-link');
+      if (tableLink) tableLink.style.display = 'none';
+      const jsonLink = document.getElementById('automation-report-json-link');
+      if (jsonLink) jsonLink.href = '/api/ubazar/automation/last-run';
     }
 
     load().catch((e) => {

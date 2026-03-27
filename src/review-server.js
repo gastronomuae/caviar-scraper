@@ -7,6 +7,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const axios = require('axios');
 
 /**
  * cPanel/Passenger mode: serve a tiny UI + run the cron CLI script from a browser.
@@ -107,6 +108,423 @@ const AUTOMATION_LAST_TXT = path.join(__dirname, '..', 'Output', 'automation_las
 const AUTOMATION_HISTORY_DIR = path.join(__dirname, '..', 'Output', 'automation_history');
 const AUTOMATION_HISTORY_INDEX = path.join(AUTOMATION_HISTORY_DIR, 'index.json');
 const SUPPLIER_DELTA_HISTORY_PATH = path.join(__dirname, '..', 'Output', 'supplier_delta_history', 'history.json');
+const UBAZAR_LATEST_JSON = path.join(__dirname, '..', 'Output', 'ubazar_products.latest.json');
+const UBAZAR_DELTA_JSON = path.join(__dirname, '..', 'Output', 'ubazar_delta.latest.json');
+const UBAZAR_MATCH_JSON = path.join(__dirname, '..', 'Output', 'ubazar_match_report.latest.json');
+const UBAZAR_MAPPING_JSON = path.join(__dirname, '..', 'Output', 'ubazar_product_mapping.json');
+const UBAZAR_STATE_JSON = path.join(__dirname, '..', 'Output', 'ubazar_match_state.json');
+const GASTRONOM_UZBEK_LATEST_JSON = path.join(__dirname, '..', 'Output', 'gastronom_uzbek_fruits_veg.latest.json');
+const UBAZAR_AUTOMATION_LAST_JSON = path.join(__dirname, '..', 'Output', 'ubazar_automation_last_run.json');
+const UBAZAR_AUTOMATION_HISTORY_DIR = path.join(__dirname, '..', 'Output', 'ubazar_automation_history');
+const UBAZAR_AUTOMATION_HISTORY_INDEX = path.join(UBAZAR_AUTOMATION_HISTORY_DIR, 'index.json');
+const UBAZAR_SNAP_DIR = path.join(__dirname, '..', 'Output', 'snapshots', 'ubazar');
+
+/** @type {Promise<unknown> | null} */
+let ubazarAutomationInFlight = null;
+/** @type {any | null} */
+let ubazarAutomationLock = null;
+
+function tokenizeSimple(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-zа-яё0-9]+/gi, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function jaccardSimple(a, b) {
+  const A = new Set(a);
+  const B = new Set(b);
+  let inter = 0;
+  for (const x of A) if (B.has(x)) inter++;
+  const u = A.size + B.size - inter;
+  return u === 0 ? 0 : inter / u;
+}
+
+function scoreNameSimple(a, b) {
+  return Math.round(100 * jaccardSimple(tokenizeSimple(a), tokenizeSimple(b)));
+}
+
+function loadUbazarLatest() {
+  const j = readJsonSafe(UBAZAR_LATEST_JSON, []);
+  return Array.isArray(j) ? j : [];
+}
+
+function readUbazarProductByHandle(handle) {
+  const h = String(handle || '').trim();
+  if (!h) return null;
+  const arr = loadUbazarLatest();
+  return arr.find((x) => String(x?.handle || '').trim() === h) || null;
+}
+
+function resolveShopifyProductGidByHandle(handle) {
+  const h = String(handle || '').trim();
+  if (!h) return null;
+  const rows = loadShopifyNormalized();
+  const row = rows.find((r) => String(r?.handle || '').trim() === h) || null;
+  return row?.shopify_product_id ? String(row.shopify_product_id) : null;
+}
+
+async function resolveShopifyProductGidByHandleLive(handle) {
+  const h = String(handle || '').trim();
+  if (!h) return null;
+  const token = await getAccessToken();
+  const data = await shopifyGraphql(
+    token,
+    `query FindByHandle($q: String!) {
+      products(first: 1, query: $q) {
+        edges { node { id handle } }
+      }
+    }`,
+    { q: `handle:${h}` }
+  );
+  const edge = data?.products?.edges?.[0] || null;
+  const node = edge?.node || null;
+  if (!node?.id) return null;
+  if (String(node.handle || '').trim() !== h) return null;
+  return String(node.id);
+}
+
+function ubazarPriceNumber(p) {
+  const n = Number(p);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+async function executeSingleVariantSyncFromUbazar({ sourceHandle, gastronomHandle }) {
+  const supplier = readUbazarProductByHandle(sourceHandle);
+  if (!supplier) throw new Error(`No supplier row for handle: ${sourceHandle}`);
+  let productGid = resolveShopifyProductGidByHandle(gastronomHandle);
+  if (!productGid) productGid = await resolveShopifyProductGidByHandleLive(gastronomHandle);
+  if (!productGid) throw new Error(`No Gastronom product for handle: ${gastronomHandle}`);
+
+  const token = await getAccessToken();
+  let locationId = SHOPIFY_LOCATION_ID;
+  if (!locationId) {
+    locationId = await getLocationIdByName(token, SHOPIFY_LOCATION_NAME);
+  }
+
+  const productData = await shopifyGraphql(
+    token,
+    `query OneProduct($id: ID!) {
+      product(id: $id) {
+        id
+        status
+        variants(first: 1) {
+          edges {
+            node {
+              id
+              price
+              inventoryQuantity
+              inventoryPolicy
+            }
+          }
+        }
+      }
+    }`,
+    { id: productGid }
+  );
+  const p = productData?.product;
+  const v = p?.variants?.edges?.[0]?.node || null;
+  if (!p?.id || !v?.id) throw new Error(`Target product has no variants: ${productGid}`);
+
+  const updates = [{ id: v.id }];
+  const price = ubazarPriceNumber(supplier.promotional_price ?? supplier.regular_price);
+  if (price != null) updates[0].price = price;
+
+  let inventoryPolicy = null;
+  let quantity = null;
+  if (supplier.available === false) {
+    inventoryPolicy = 'DENY';
+    quantity = 0;
+  } else {
+    // UBazar has no reliable qty; default to unlimited unless explicitly unavailable.
+    inventoryPolicy = 'CONTINUE';
+    quantity = 0;
+  }
+  if (inventoryPolicy) updates[0].inventoryPolicy = inventoryPolicy;
+
+  await shopifyGraphql(
+    token,
+    `mutation PVBulk($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+        productVariants { id price inventoryPolicy }
+        userErrors { field message }
+      }
+    }`,
+    { productId: p.id, variants: updates }
+  );
+
+  if (quantity != null) {
+    await setAvailableQuantity({
+      variantId: v.id,
+      locationId,
+      quantity,
+      reason: 'correction',
+      referenceDocumentUri: 'caviar-scraper://ubazar/single-variant-sync'
+    });
+  }
+
+  let setActiveAfterSync = false;
+  let statusNow = String(p.status || '').toUpperCase().trim();
+  if (statusNow === 'DRAFT' && supplier.available === true) {
+    const changed = await setProductStatus(p.id, 'ACTIVE');
+    setActiveAfterSync = true;
+    statusNow = String(changed?.status || statusNow).toUpperCase().trim();
+  }
+
+  // Fetch final state for immediate UI refresh.
+  const afterData = await shopifyGraphql(
+    token,
+    `query After($id: ID!) {
+      product(id: $id) {
+        id
+        status
+        variants(first: 1) {
+          edges {
+            node { id price inventoryQuantity inventoryPolicy }
+          }
+        }
+      }
+    }`,
+    { id: p.id }
+  );
+  const afterV = afterData?.product?.variants?.edges?.[0]?.node || null;
+
+  return {
+    ok: true,
+    mode: 'ubazar_single_variant',
+    source_handle: sourceHandle,
+    gastronom_handle: gastronomHandle,
+    shopify_product_id: p.id,
+    applied: {
+      bulk_update_rows: 1,
+      inventory_rows: quantity != null ? 1 : 0,
+      option_values_added: 0,
+      reorder_moved_rows: 0
+    },
+    set_active_after_sync: setActiveAfterSync,
+    after: {
+      product_status: String(afterData?.product?.status || statusNow || '').toUpperCase().trim() || null,
+      variant_id: afterV?.id || null,
+      price: afterV?.price != null ? Number(afterV.price) : null,
+      inventory_policy: afterV?.inventoryPolicy ? String(afterV.inventoryPolicy).toUpperCase().trim() : null,
+      inventory_quantity: afterV?.inventoryQuantity != null ? Number(afterV.inventoryQuantity) : null
+    }
+  };
+}
+
+function loadGastronomUzbekLatest() {
+  const j = readJsonSafe(path.join(__dirname, '..', 'Output', 'gastronom_uzbek_fruits_veg.latest.json'), {});
+  const arr = Array.isArray(j?.products) ? j.products : [];
+  return arr;
+}
+
+function loadGastronomImagesByHandle() {
+  const rows = readJsonSafe(path.join(__dirname, '..', 'Output', 'from_gastronom.json'), []);
+  const out = new Map();
+  if (!Array.isArray(rows)) return out;
+  for (const r of rows) {
+    const h = String(r?.handle || '').trim();
+    if (!h) continue;
+    const img =
+      r?.image ||
+      r?.image_url ||
+      r?.imageUrl ||
+      r?.['Image url'] ||
+      r?.['image url'] ||
+      null;
+    if (img && !out.has(h)) out.set(h, String(img));
+  }
+  return out;
+}
+
+function loadUbazarMapping() {
+  const j = readJsonSafe(UBAZAR_MAPPING_JSON, {});
+  return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
+}
+
+function saveUbazarMapping(obj) {
+  fs.mkdirSync(path.dirname(UBAZAR_MAPPING_JSON), { recursive: true });
+  fs.writeFileSync(UBAZAR_MAPPING_JSON, JSON.stringify(obj, null, 2), 'utf8');
+}
+
+function loadUbazarState() {
+  const j = readJsonSafe(UBAZAR_STATE_JSON, {});
+  return {
+    noMatchHandles: Array.isArray(j?.noMatchHandles) ? j.noMatchHandles : []
+  };
+}
+
+function saveUbazarState(state) {
+  fs.mkdirSync(path.dirname(UBAZAR_STATE_JSON), { recursive: true });
+  fs.writeFileSync(UBAZAR_STATE_JSON, JSON.stringify(state, null, 2), 'utf8');
+}
+
+function buildUbazarMatchReport() {
+  const supplier = loadUbazarLatest();
+  const gastronom = loadGastronomUzbekLatest();
+  const gastronomImages = loadGastronomImagesByHandle();
+  const mapping = loadUbazarMapping();
+  const state = loadUbazarState();
+  const noSet = new Set(state.noMatchHandles);
+
+  const rows = [];
+  for (const s of supplier) {
+    const handle = String(s?.handle || '').trim();
+    if (!handle) continue;
+    const mappedHandle = String(mapping[handle] || '').trim();
+
+    const scored = gastronom
+      .map((g) => ({
+        ...g,
+        // Keep same field names as main matcher UI.
+        name_ru: g.name,
+        shopify_product_id: g.handle,
+        image: g?.image || gastronomImages.get(String(g?.handle || '').trim()) || null,
+        score: scoreNameSimple(s.name, g.name),
+        reason: 'name_similarity'
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    // IMPORTANT: for confirmed mappings, force the mapped product to appear first.
+    let suggestions = scored.slice(0, 3);
+    if (mappedHandle) {
+      const mapped = scored.find((x) => String(x?.handle || '').trim() === mappedHandle) || null;
+      if (mapped) {
+        suggestions = [
+          {
+            ...mapped,
+            score: 100,
+            reason: 'saved_mapping'
+          },
+          ...scored.filter((x) => String(x?.handle || '').trim() !== mappedHandle).slice(0, 2)
+        ];
+      }
+    }
+    let status = '⚠️ needs review';
+    if (mappedHandle) status = '✅ confirmed';
+    else if (noSet.has(handle)) status = '❌ no match';
+    rows.push({
+      supplier: {
+        ...s,
+        name_en: s.name
+      },
+      status,
+      mapped_handle: mappedHandle || null,
+      suggestions
+    });
+  }
+  rows.sort((a, b) => String(a.supplier?.name || '').localeCompare(String(b.supplier?.name || ''), 'ru'));
+  return { rows, gastronom_count: gastronom.length, supplier_count: rows.length };
+}
+
+function loadGastronomUzbekProducts() {
+  const j = readJsonSafe(GASTRONOM_UZBEK_LATEST_JSON, {});
+  const arr = Array.isArray(j?.products) ? j.products : [];
+  return arr;
+}
+
+app.get('/api/ubazar/unpaired-gastronom', (req, res) => {
+  try {
+    const gastronom = loadGastronomUzbekProducts();
+    const mapping = loadUbazarMapping();
+    const mappedTargets = new Set(Object.values(mapping || {}).map((x) => String(x || '').trim()).filter(Boolean));
+    const unpaired = gastronom.filter((g) => {
+      const h = String(g?.handle || '').trim();
+      if (!h) return false;
+      return !mappedTargets.has(h);
+    });
+    const active = unpaired.filter((p) => String(p?.product_status || '').toUpperCase().trim() === 'ACTIVE').length;
+    const draft = unpaired.filter((p) => String(p?.product_status || '').toUpperCase().trim() === 'DRAFT').length;
+    res.json({
+      ok: true,
+      supplier: 'ubazar',
+      gastronom_source: 'uzbek_collection',
+      gastronom_count: gastronom.length,
+      count: unpaired.length,
+      active,
+      draft,
+      products: unpaired.map((p) => ({
+        name: p.name,
+        handle: p.handle,
+        image: p.image || null,
+        url: p.url || null,
+        status: String(p.product_status || '').toUpperCase().trim() || '—'
+      }))
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+/** UBazar: draft all ACTIVE unpaired Gastronom products (same UX as caviar modal). */
+app.post('/api/ubazar/unpaired-gastronom/draft-active', async (req, res) => {
+  try {
+    const mapping = loadUbazarMapping();
+    const mappedTargets = new Set(Object.values(mapping || {}).map((x) => String(x || '').trim()).filter(Boolean));
+    const gastronom = loadGastronomUzbekProducts();
+    const targets = gastronom
+      .filter((p) => {
+        const h = String(p?.handle || '').trim();
+        if (!h) return false;
+        if (mappedTargets.has(h)) return false;
+        return String(p?.product_status || '').toUpperCase().trim() === 'ACTIVE';
+      })
+      .map((p) => String(p.handle).trim());
+
+    const drafted = [];
+    const failed = [];
+    for (const handle of targets) {
+      try {
+        const gid = await resolveShopifyProductGidByHandleLive(handle);
+        if (!gid) throw new Error(`No Shopify product found by handle: ${handle}`);
+        await setProductStatus(gid, 'DRAFT');
+        drafted.push(handle);
+      } catch (e) {
+        failed.push({ handle, error: String(e.message || e) });
+      }
+    }
+    res.json({ ok: true, drafted: drafted.length, failed, handles: drafted });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/ubazar/unpaired-supplier', (req, res) => {
+  try {
+    const supplier = loadUbazarLatest();
+    const mapping = loadUbazarMapping();
+    const state = loadUbazarState();
+    const noMatch = new Set((state?.noMatchHandles || []).map((x) => String(x || '').trim()).filter(Boolean));
+    const products = supplier.filter((s) => {
+      const h = String(s?.handle || '').trim();
+      if (!h) return false;
+      const mapped = String(mapping?.[h] || '').trim();
+      if (mapped) return false;
+      return true;
+    });
+    const noMatchCount = products.filter((p) => noMatch.has(String(p?.handle || '').trim())).length;
+    const needsReviewCount = Math.max(0, products.length - noMatchCount);
+    res.json({
+      ok: true,
+      supplier: 'ubazar',
+      supplier_product_count: supplier.length,
+      count: products.length,
+      counts: { needs_review: needsReviewCount, no_match: noMatchCount },
+      products: products.map((p) => ({
+        name: p.name,
+        handle: p.handle,
+        image: p.image || null,
+        url: p.url || null,
+        price: p.promotional_price ?? p.regular_price ?? null,
+        available: p.available ?? null,
+        status: noMatch.has(String(p?.handle || '').trim()) ? 'NO MATCH' : 'NEEDS REVIEW'
+      }))
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
 
 function execNodeScript(scriptPath, args = []) {
   return new Promise((resolve, reject) => {
@@ -170,6 +588,75 @@ function writeAutomationArtifacts(result) {
     txt: path.basename(AUTOMATION_LAST_TXT),
     history_json: runFile
   };
+}
+
+function writeUbazarAutomationArtifacts(result) {
+  fs.mkdirSync(UBAZAR_AUTOMATION_HISTORY_DIR, { recursive: true });
+  fs.writeFileSync(UBAZAR_AUTOMATION_LAST_JSON, JSON.stringify(result, null, 2), 'utf8');
+  const runId = toRunId(result?.started_at);
+  const runFile = `${runId}.json`;
+  const runPath = path.join(UBAZAR_AUTOMATION_HISTORY_DIR, runFile);
+  fs.writeFileSync(runPath, JSON.stringify(result, null, 2), 'utf8');
+  let index = readJsonSafe(UBAZAR_AUTOMATION_HISTORY_INDEX, []);
+  if (!Array.isArray(index)) index = [];
+  index = index.filter((x) => x && x.id !== runId);
+  index.unshift({
+    id: runId,
+    started_at: result?.started_at || null,
+    finished_at: result?.finished_at || null,
+    ok: result?.ok === true,
+    counts: result?.counts || {},
+    file: runFile
+  });
+  index = index.slice(0, 60);
+  fs.writeFileSync(UBAZAR_AUTOMATION_HISTORY_INDEX, JSON.stringify(index, null, 2), 'utf8');
+  return { run_id: runId, history_json: runFile };
+}
+
+function ubazarSupplierKey(p) {
+  return String(p?.handle || '').trim() || null;
+}
+
+function ubazarSupplierComparable(p) {
+  return {
+    name: p?.name ?? '',
+    url: p?.url ?? '',
+    image: p?.image ?? null,
+    regular_price: p?.regular_price ?? null,
+    promotional_price: p?.promotional_price ?? null,
+    available: p?.available == null ? null : Boolean(p?.available)
+  };
+}
+
+function diffUbazarSnapshots(prevArr, nextArr) {
+  const prevMap = new Map();
+  const nextMap = new Map();
+  for (const p of prevArr || []) { const k = ubazarSupplierKey(p); if (k) prevMap.set(k, p); }
+  for (const p of nextArr || []) { const k = ubazarSupplierKey(p); if (k) nextMap.set(k, p); }
+  const added = [], removed = [], updated = [];
+  for (const [k, p] of nextMap) {
+    if (!prevMap.has(k)) { added.push({ handle: k, name: p?.name ?? '', url: p?.url ?? '', image: p?.image ?? null }); continue; }
+    const a = ubazarSupplierComparable(prevMap.get(k));
+    const b = ubazarSupplierComparable(p);
+    const changed = [];
+    if (JSON.stringify(a.promotional_price) !== JSON.stringify(b.promotional_price)) changed.push({ field: 'promotional_price', from: a.promotional_price, to: b.promotional_price });
+    if (JSON.stringify(a.regular_price) !== JSON.stringify(b.regular_price)) changed.push({ field: 'regular_price', from: a.regular_price, to: b.regular_price });
+    if (JSON.stringify(a.available) !== JSON.stringify(b.available)) changed.push({ field: 'available', from: a.available, to: b.available });
+    if (changed.length) updated.push({ handle: k, name: b.name || a.name || '', url: b.url || a.url || '', changed });
+  }
+  for (const [k, p] of prevMap) {
+    if (!nextMap.has(k)) removed.push({ handle: k, name: p?.name ?? '', url: p?.url ?? '', image: p?.image ?? null });
+  }
+  return { added, removed, updated };
+}
+
+function saveUbazarSnapshot() {
+  fs.mkdirSync(UBAZAR_SNAP_DIR, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const outPath = path.join(UBAZAR_SNAP_DIR, `${stamp}.json`);
+  const arr = readJsonSafe(UBAZAR_LATEST_JSON, []);
+  fs.writeFileSync(outPath, JSON.stringify(Array.isArray(arr) ? arr : [], null, 2), 'utf8');
+  return { saved: path.basename(outPath), count: Array.isArray(arr) ? arr.length : 0 };
 }
 
 function fmt(n) {
@@ -837,6 +1324,406 @@ app.get('/api/supplier-delta/history', (req, res) => {
   }
 });
 
+app.post('/api/ubazar/run', async (req, res) => {
+  if (ubazarAutomationInFlight) {
+    return res.status(409).json({ ok: false, error: 'UBazar automation already running; wait for it to finish.' });
+  }
+  try {
+    ubazarAutomationLock = createFileLock(path.join(__dirname, '..', 'Output', 'locks', 'ubazar_automation.lock'));
+  } catch (e) {
+    return res.status(409).json({ ok: false, error: String(e.message || e) });
+  }
+
+  const started_at = new Date().toISOString();
+  const result = {
+    ok: true,
+    started_at,
+    finished_at: null,
+    steps: [],
+    warnings: [],
+    errors: [],
+    counts: {
+      ubazar_latest_products: 0,
+      supplier_delta_added: 0,
+      supplier_delta_removed: 0,
+      supplier_delta_updated: 0,
+      drafted_unpaired_gastronom: 0,
+      drafted_unpaired_failed: 0,
+      mapped_activated: 0,
+      mapped_drafted: 0,
+      mapped_failed: 0,
+      variant_sync_ok: 0,
+      variant_sync_failed: 0
+    }
+  };
+
+  ubazarAutomationInFlight = (async () => {
+    try {
+      // Step 1: fetch Gastronom collection (before changes)
+      const m0 = await execNodeScript(path.join(__dirname, '..', 'src', 'fetch-gastronom-uzbek-fruits-veg.js'));
+      result.steps.push({ step: 'fetch_gastronom_uzbek', ok: true, ...m0 });
+
+      // Step 2: snapshot previous UBazar state (for delta)
+      const ubazarBefore = readJsonSafe(UBAZAR_LATEST_JSON, []);
+      const snap = saveUbazarSnapshot();
+      result.steps.push({ step: 'ubazar_snapshot_before', ok: true, ...snap });
+
+      // Step 3: scrape UBazar
+      const r = await execNodeScript(path.join(__dirname, '..', 'src', 'fetch-products-all-ubazar.js'));
+      result.steps.push({ step: 'ubazar_scrape', ok: true, ...r });
+
+      // Step 4: compute supplier delta
+      const ubazarAfter = readJsonSafe(UBAZAR_LATEST_JSON, []);
+      result.counts.ubazar_latest_products = Array.isArray(ubazarAfter) ? ubazarAfter.length : 0;
+      const delta = diffUbazarSnapshots(Array.isArray(ubazarBefore) ? ubazarBefore : [], Array.isArray(ubazarAfter) ? ubazarAfter : []);
+      result.counts.supplier_delta_added = delta.added.length;
+      result.counts.supplier_delta_removed = delta.removed.length;
+      result.counts.supplier_delta_updated = delta.updated.length;
+      result.steps.push({ step: 'supplier_delta', ok: true, counts: { added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length }, delta });
+
+      // Step 5: draft UNPAIRED Gastronom products (not mapped to any UBazar item)
+      const mapping = loadUbazarMapping();
+      const mappedTargets = new Set(Object.values(mapping || {}).map((x) => String(x || '').trim()).filter(Boolean));
+      const gastronom = loadGastronomUzbekProducts();
+      const unpairedHandles = gastronom
+        .map((p) => String(p?.handle || '').trim())
+        .filter(Boolean)
+        .filter((h) => !mappedTargets.has(h));
+
+      const drafted = [];
+      const draftFailed = [];
+      for (const gastroHandle of unpairedHandles) {
+        try {
+          const gid = await resolveShopifyProductGidByHandleLive(gastroHandle);
+          if (!gid) throw new Error(`No Shopify product found by handle: ${gastroHandle}`);
+          await setProductStatus(gid, 'DRAFT');
+          drafted.push({ gastronom_handle: gastroHandle });
+        } catch (e) {
+          draftFailed.push({ gastronom_handle: gastroHandle, error: String(e.message || e) });
+        }
+      }
+      result.counts.drafted_unpaired_gastronom = drafted.length;
+      result.counts.drafted_unpaired_failed = draftFailed.length;
+      result.steps.push({ step: 'draft_unpaired_gastronom', ok: draftFailed.length === 0, drafted, failed: draftFailed });
+
+      // Step 6: for each mapped pair — ACTIVE+sync if UBazar present & available, else DRAFT
+      const ubazarByHandle = new Map((Array.isArray(ubazarAfter) ? ubazarAfter : []).map((x) => [String(x?.handle || '').trim(), x]));
+      const activatedMapped = [];
+      const draftedMapped = [];
+      const mappedFailed = [];
+      const mappedSynced = [];
+      const mappedSyncFailed = [];
+      for (const [sourceHandle, gastroHandleRaw] of Object.entries(mapping || {})) {
+        const source = String(sourceHandle || '').trim();
+        const gastroHandle = String(gastroHandleRaw || '').trim();
+        if (!source || !gastroHandle) continue;
+        const sup = ubazarByHandle.get(source) || null;
+        const shouldDraft = !sup || sup.available === false;
+        try {
+          const gid = await resolveShopifyProductGidByHandleLive(gastroHandle);
+          if (!gid) throw new Error(`No Shopify product found by handle: ${gastroHandle}`);
+          if (shouldDraft) {
+            await setProductStatus(gid, 'DRAFT');
+            draftedMapped.push({ source_handle: source, gastronom_handle: gastroHandle, reason: !sup ? 'missing_from_ubazar' : 'ubazar_unavailable' });
+          } else {
+            await setProductStatus(gid, 'ACTIVE');
+            activatedMapped.push({ source_handle: source, gastronom_handle: gastroHandle });
+            try {
+              const out = await executeSingleVariantSyncFromUbazar({ sourceHandle: source, gastronomHandle: gastroHandle });
+              mappedSynced.push({ source_handle: source, gastronom_handle: gastroHandle, after: out?.after || null });
+            } catch (se) {
+              mappedSyncFailed.push({ source_handle: source, gastronom_handle: gastroHandle, error: String(se.message || se) });
+            }
+          }
+        } catch (e) {
+          mappedFailed.push({ source_handle: source, gastronom_handle: gastroHandle, error: String(e.message || e) });
+        }
+      }
+      result.counts.mapped_activated = activatedMapped.length;
+      result.counts.mapped_drafted = draftedMapped.length;
+      result.counts.mapped_failed = mappedFailed.length;
+      result.counts.variant_sync_ok = mappedSynced.length;
+      result.counts.variant_sync_failed = mappedSyncFailed.length;
+      result.steps.push({
+        step: 'sync_mapped_products',
+        ok: mappedFailed.length === 0 && mappedSyncFailed.length === 0,
+        activated: activatedMapped,
+        drafted: draftedMapped,
+        failed: mappedFailed,
+        synced: mappedSynced,
+        sync_failed: mappedSyncFailed
+      });
+
+      // Step 7: re-fetch Gastronom snapshot so UI shows updated ACTIVE/DRAFT state
+      const m1 = await execNodeScript(path.join(__dirname, '..', 'src', 'fetch-gastronom-uzbek-fruits-veg.js'));
+      result.steps.push({ step: 'fetch_gastronom_uzbek_post_sync', ok: true, ...m1 });
+
+      result.finished_at = new Date().toISOString();
+    } catch (e) {
+      result.ok = false;
+      result.errors.push(String(e.message || e));
+      result.finished_at = new Date().toISOString();
+    }
+
+    try {
+      result.report_paths = writeUbazarAutomationArtifacts(result);
+    } catch (e) {
+      result.warnings.push(`Could not write ubazar automation report files: ${String(e.message || e)}`);
+    }
+    return result;
+  })().finally(() => {
+    ubazarAutomationInFlight = null;
+    if (ubazarAutomationLock) {
+      ubazarAutomationLock.release();
+      ubazarAutomationLock = null;
+    }
+  });
+
+  try {
+    const out = await ubazarAutomationInFlight;
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/ubazar/automation/last-run', (req, res) => {
+  try {
+    if (!fs.existsSync(UBAZAR_AUTOMATION_LAST_JSON)) return res.status(404).json({ ok: false, error: 'No UBazar automation run saved yet.' });
+    res.type('json').send(fs.readFileSync(UBAZAR_AUTOMATION_LAST_JSON, 'utf8'));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/ubazar/automation/history', (req, res) => {
+  try {
+    const max = Number(req.query.limit || 30);
+    const limit = Number.isFinite(max) && max > 0 ? max : 30;
+    const index = readJsonSafe(UBAZAR_AUTOMATION_HISTORY_INDEX, []);
+    const entries = Array.isArray(index) ? index.slice(0, limit) : [];
+    res.json({ ok: true, entries });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/ubazar/automation/history/:id', (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ ok: false, error: 'id required' });
+    const runPath = path.join(UBAZAR_AUTOMATION_HISTORY_DIR, `${id}.json`);
+    if (!fs.existsSync(runPath)) return res.status(404).json({ ok: false, error: 'Run not found' });
+    res.type('json').send(fs.readFileSync(runPath, 'utf8'));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/ubazar/latest', (req, res) => {
+  try {
+    if (!fs.existsSync(UBAZAR_LATEST_JSON)) return res.status(404).json({ ok: false, error: 'No UBazar latest file yet.' });
+    res.type('json').send(fs.readFileSync(UBAZAR_LATEST_JSON, 'utf8'));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/ubazar/delta', (req, res) => {
+  try {
+    if (!fs.existsSync(UBAZAR_DELTA_JSON)) return res.status(404).json({ ok: false, error: 'No UBazar delta file yet.' });
+    res.type('json').send(fs.readFileSync(UBAZAR_DELTA_JSON, 'utf8'));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/ubazar/match-report', (req, res) => {
+  try {
+    if (!fs.existsSync(UBAZAR_MATCH_JSON)) return res.status(404).json({ ok: false, error: 'No UBazar match report yet.' });
+    res.type('json').send(fs.readFileSync(UBAZAR_MATCH_JSON, 'utf8'));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.post('/api/gastronom-uzbek/run', async (req, res) => {
+  try {
+    const m = await execNodeScript(path.join(__dirname, '..', 'src', 'fetch-gastronom-uzbek-fruits-veg.js'));
+    res.json({ ok: true, gastronom_latest_path: GASTRONOM_UZBEK_LATEST_JSON, gastronom_run: m });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/gastronom-uzbek/latest', (req, res) => {
+  try {
+    if (!fs.existsSync(GASTRONOM_UZBEK_LATEST_JSON)) {
+      return res.status(404).json({ ok: false, error: 'No Gastronom Uzbek latest file yet.' });
+    }
+    res.type('json').send(fs.readFileSync(GASTRONOM_UZBEK_LATEST_JSON, 'utf8'));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+// Public Shopify storefront suggest search (no admin token), used by UBazar manual search.
+app.get('/api/gastronom/public-search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json([]);
+    const url =
+      'https://www.gastronom.ae/search/suggest.json' +
+      `?q=${encodeURIComponent(q)}` +
+      '&resources[type]=product' +
+      '&resources[limit]=20' +
+      '&resources[options][unavailable_products]=last';
+    const { data } = await axios.get(url, {
+      timeout: 60000,
+      headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' }
+    });
+    const products = data?.resources?.results?.products || [];
+    const hits = (Array.isArray(products) ? products : []).map((p) => ({
+      name: p?.title || '',
+      name_ru: p?.title || '',
+      handle: p?.handle || null,
+      // In UBazar flow we treat handle as the stable identifier; sync resolves to GID live.
+      shopify_product_id: p?.handle || null,
+      image: p?.image || null,
+      available: p?.available ?? null,
+      url: p?.url ? `https://www.gastronom.ae${p.url}` : p?.handle ? `https://www.gastronom.ae/products/${p.handle}` : null,
+      price: p?.price ?? null
+    }));
+    res.json(hits.filter((h) => h.handle));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+// Collection-only search (Uzbek fruits/veg), used when you want to avoid unrelated store products.
+app.get('/api/gastronom/uzbek-search', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().toLowerCase();
+    if (!q) return res.json([]);
+    const products = loadGastronomUzbekProducts();
+    const hits = products
+      .filter((p) => {
+        const name = String(p?.name || '').toLowerCase();
+        const handle = String(p?.handle || '').toLowerCase();
+        return name.includes(q) || handle.includes(q);
+      })
+      .slice(0, 30)
+      .map((p) => ({
+        name: p?.name || '',
+        name_ru: p?.name || '',
+        handle: p?.handle || null,
+        shopify_product_id: p?.handle || null,
+        image: p?.image || null,
+        available: p?.available ?? null,
+        url: p?.url || (p?.handle ? `https://www.gastronom.ae/products/${p.handle}` : null),
+        price: p?.price ?? null,
+        source: 'collection:fruits-vegetables-uzbekistan'
+      }))
+      .filter((h) => h.handle);
+    res.json(hits);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/ubazar/report', (req, res) => {
+  try {
+    res.json(buildUbazarMatchReport());
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.get('/api/ubazar/search', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().toLowerCase();
+    if (!q) return res.json([]);
+    const gastronom = loadGastronomUzbekLatest();
+    const gastronomImages = loadGastronomImagesByHandle();
+    const hits = gastronom
+      .filter((g) => String(g?.name || '').toLowerCase().includes(q) || String(g?.handle || '').toLowerCase().includes(q))
+      .slice(0, 20)
+      .map((g) => ({
+        name: g.name,
+        name_ru: g.name,
+        handle: g.handle,
+        shopify_product_id: g.handle,
+        image: g?.image || gastronomImages.get(String(g?.handle || '').trim()) || null,
+        url: g.url,
+        price: g.price,
+        available: g.available
+      }));
+    res.json(hits);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.post('/api/ubazar/confirm', (req, res) => {
+  try {
+    const sourceHandle = String(req.body?.source_handle || '').trim();
+    const gastronomHandle = String(
+      req.body?.gastronom_handle || req.body?.shopify_product_id || ''
+    ).trim();
+    if (!sourceHandle || !gastronomHandle) {
+      return res.status(400).json({ ok: false, error: 'source_handle and gastronom_handle required' });
+    }
+    const m = loadUbazarMapping();
+    m[sourceHandle] = gastronomHandle;
+    saveUbazarMapping(m);
+
+    const st = loadUbazarState();
+    st.noMatchHandles = (st.noMatchHandles || []).filter((h) => h !== sourceHandle);
+    saveUbazarState(st);
+    res.json({ ok: true, mapping: m });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.post('/api/ubazar/no-match', (req, res) => {
+  try {
+    const sourceHandle = String(req.body?.source_handle || '').trim();
+    if (!sourceHandle) return res.status(400).json({ ok: false, error: 'source_handle required' });
+    const m = loadUbazarMapping();
+    delete m[sourceHandle];
+    saveUbazarMapping(m);
+
+    const st = loadUbazarState();
+    const set = new Set(st.noMatchHandles || []);
+    set.add(sourceHandle);
+    st.noMatchHandles = [...set];
+    saveUbazarState(st);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+// Clear a wrong confirmed mapping (keeps row in "needs review", does NOT mark as "no match").
+app.post('/api/ubazar/clear-match', (req, res) => {
+  try {
+    const sourceHandle = String(req.body?.source_handle || '').trim();
+    if (!sourceHandle) return res.status(400).json({ ok: false, error: 'source_handle required' });
+    const m = loadUbazarMapping();
+    delete m[sourceHandle];
+    saveUbazarMapping(m);
+
+    const st = loadUbazarState();
+    st.noMatchHandles = (st.noMatchHandles || []).filter((h) => h !== sourceHandle);
+    saveUbazarState(st);
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 app.post('/api/confirm', (req, res) => {
   try {
     const { source_handle, shopify_product_id } = req.body || {};
@@ -1101,7 +1988,20 @@ app.post('/api/inventory/policy', async (req, res) => {
  */
 app.post('/api/variants/sync-from-supplier', async (req, res) => {
   try {
-    const { source_handle, shopify_product_id, dry_run } = req.body || {};
+    const { source_handle, shopify_product_id, dry_run, supplier_mode } = req.body || {};
+    const mode = String(supplier_mode || 'caviar').trim().toLowerCase();
+    if (mode === 'ubazar') {
+      if (!source_handle || !shopify_product_id) {
+        return res
+          .status(400)
+          .json({ ok: false, error: 'source_handle and shopify_product_id(gastronom handle) required' });
+      }
+      const result = await executeSingleVariantSyncFromUbazar({
+        sourceHandle: String(source_handle).trim(),
+        gastronomHandle: String(shopify_product_id).trim()
+      });
+      return res.json(result);
+    }
     if (!source_handle || !shopify_product_id) {
       return res.status(400).json({ ok: false, error: 'source_handle and shopify_product_id required' });
     }
@@ -1180,7 +2080,13 @@ function sendReviewHtml(res) {
   res.type('html').send(html);
 }
 
-app.get('/', (req, res) => sendReviewHtml(res));
+app.get('/', (req, res, next) => {
+  const forceMode = process.env.UBAZAR_REDIRECT_MODE;
+  if (forceMode && !req.query.mode) {
+    return res.redirect(`/?mode=${encodeURIComponent(forceMode)}`);
+  }
+  next();
+}, (req, res) => sendReviewHtml(res));
 app.get('/review.html', (req, res) => sendReviewHtml(res));
 
 app.use(express.static(PUBLIC));
@@ -1191,6 +2097,16 @@ app.get('/supplier-delta', (req, res) => {
 
 app.get('/automation-report', (req, res) => {
   res.sendFile(path.join(PUBLIC, 'automation-report.html'));
+});
+
+app.get('/ubazar-report', (req, res) => {
+  res.sendFile(path.join(PUBLIC, 'ubazar-report.html'));
+});
+
+app.get('/ubazar-match', (req, res) => {
+  const q = new URLSearchParams(req.query || {});
+  q.set('mode', 'ubazar');
+  return res.redirect('/?' + q.toString());
 });
 
 ensureFiles();

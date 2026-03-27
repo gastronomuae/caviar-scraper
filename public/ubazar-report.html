@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UBazar report</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3d8bfd;
+      --ok: #3fb950;
+      --bad: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+    header {
+      padding: 12px 20px;
+      border-bottom: 1px solid #2d3a4f;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 1rem; }
+    main { max-width: 1280px; margin: 0 auto; padding: 16px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    .panel { background: var(--panel); border: 1px solid #2d3a4f; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+    .meta { color: var(--muted); font-size: 0.9rem; }
+    button {
+      background: var(--panel); color: var(--text);
+      border: 1px solid #3d4f6f; border-radius: 6px;
+      padding: 8px 14px; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid #2d3a4f; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.8rem; }
+    a { color: var(--accent); }
+    .pill {
+      display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 0.75rem;
+      border: 1px solid #3d4f6f; color: var(--muted);
+    }
+    .ok { border-color: var(--ok); color: var(--ok); }
+    .bad { border-color: var(--bad); color: var(--bad); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>UBazar report</h1>
+    <span class="meta" id="hdr"></span>
+    <span style="flex:1 1 auto;"></span>
+    <a href="/">← Back to dashboard</a>
+  </header>
+  <main>
+    <div class="row">
+      <button type="button" class="primary" id="btn-run" onclick="runPipeline(this)">Run UBazar pipeline</button>
+      <button type="button" onclick="loadAll()">Refresh</button>
+      <a href="/api/ubazar/latest" target="_blank" rel="noopener noreferrer">Latest JSON</a>
+      <a href="/api/ubazar/delta" target="_blank" rel="noopener noreferrer">Delta JSON</a>
+      <a href="/api/ubazar/match-report" target="_blank" rel="noopener noreferrer">Match JSON</a>
+      <span class="meta" id="status"></span>
+    </div>
+
+    <div class="panel" id="summary"><div class="meta">Loading…</div></div>
+
+    <div class="panel">
+      <h2 style="margin:0 0 8px;font-size:1rem;">UBazar latest products</h2>
+      <div id="latest-tbl"></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin:0 0 8px;font-size:1rem;">UBazar delta</h2>
+      <div id="delta"></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin:0 0 8px;font-size:1rem;">Match suggestions (manual review start)</h2>
+      <div id="match-tbl"></div>
+    </div>
+  </main>
+
+  <script>
+    function esc(t) {
+      const d = document.createElement('div');
+      d.textContent = t == null ? '' : String(t);
+      return d.innerHTML;
+    }
+    function yn(v) {
+      if (v === true) return '<span class="pill ok">in stock</span>';
+      if (v === false) return '<span class="pill bad">not available</span>';
+      return '<span class="pill">unknown</span>';
+    }
+    function num(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(2) : '—';
+    }
+    async function getJson(url) {
+      const r = await fetch(url);
+      const t = await r.text();
+      if (!r.ok) throw new Error(t || `HTTP ${r.status}`);
+      return JSON.parse(t);
+    }
+    function renderLatest(arr) {
+      if (!Array.isArray(arr) || !arr.length) return '<div class="meta">—</div>';
+      return `<table><thead><tr>
+        <th>Name</th><th>Price</th><th>Old price</th><th>Available</th><th>URL</th>
+      </tr></thead><tbody>
+      ${arr.map((p) => `<tr>
+        <td>${esc(p.name)}</td>
+        <td>${num(p.promotional_price)}</td>
+        <td>${num(p.regular_price)}</td>
+        <td>${yn(p.available)}</td>
+        <td>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">open</a>` : '—'}</td>
+      </tr>`).join('')}
+      </tbody></table>`;
+    }
+    function renderDelta(j) {
+      const c = j?.counts || {};
+      const d = j?.delta || {};
+      return `
+        <div class="meta">
+          Total: <strong>${esc(c.total ?? 0)}</strong> · Added: <strong>${esc(c.added ?? 0)}</strong> ·
+          Updated: <strong>${esc(c.updated ?? 0)}</strong> · Removed: <strong>${esc(c.removed ?? 0)}</strong>
+        </div>
+        <div class="meta" style="margin-top:8px;">
+          Source: ${esc(j?.source || '—')} · Main category: ${esc(j?.discovered?.mainCategory || '—')}
+        </div>`;
+    }
+    function renderMatch(rows) {
+      if (!Array.isArray(rows) || !rows.length) return '<div class="meta">—</div>';
+      return `<table><thead><tr>
+        <th>UBazar</th><th>UBazar price</th><th>Top Gastronom suggestions</th>
+      </tr></thead><tbody>
+      ${rows.map((r) => {
+        const top = (r.suggestions || []).map((s) =>
+          `${esc(s.name)} (score ${esc(s.score ?? 0)}${s.price != null ? `, ${num(s.price)} AED` : ''})`
+        );
+        return `<tr>
+          <td><strong>${esc(r.ubazar?.name || '')}</strong><br/><span class="meta">${esc(r.ubazar?.handle || '')}</span></td>
+          <td>${num(r.ubazar?.promotional_price)}</td>
+          <td>${top.length ? top.join('<br/>') : '—'}</td>
+        </tr>`;
+      }).join('')}
+      </tbody></table>`;
+    }
+    async function loadAll() {
+      const status = document.getElementById('status');
+      status.textContent = 'Loading…';
+      try {
+        const [latest, delta, match] = await Promise.all([
+          getJson('/api/ubazar/latest').catch(() => []),
+          getJson('/api/ubazar/delta').catch(() => ({})),
+          getJson('/api/ubazar/match-report').catch(() => ({}))
+        ]);
+        const latestArr = Array.isArray(latest) ? latest : [];
+        document.getElementById('summary').innerHTML =
+          `<div class="meta">UBazar rows: <strong>${latestArr.length}</strong> · Last refresh: ${esc(delta?.scraped_at || match?.generated_at || '—')}</div>`;
+        document.getElementById('latest-tbl').innerHTML = renderLatest(latestArr);
+        document.getElementById('delta').innerHTML = renderDelta(delta || {});
+        document.getElementById('match-tbl').innerHTML = renderMatch(match?.rows || []);
+        document.getElementById('hdr').textContent = delta?.scraped_at ? `Last run ${delta.scraped_at}` : '';
+        status.textContent = '';
+      } catch (e) {
+        status.textContent = '';
+        document.getElementById('summary').innerHTML = `<div class="meta">${esc(String(e.message || e))}</div>`;
+      }
+    }
+    async function runPipeline(btn) {
+      const prev = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      document.getElementById('status').textContent = 'Running UBazar pipeline…';
+      try {
+        const r = await fetch('/api/ubazar/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const t = await r.text();
+        if (!r.ok) throw new Error(t || `HTTP ${r.status}`);
+        await loadAll();
+      } catch (e) {
+        document.getElementById('status').textContent = `Run failed: ${String(e.message || e)}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = prev;
+      }
+    }
+    loadAll();
+  </script>
+</body>
+</html>
+

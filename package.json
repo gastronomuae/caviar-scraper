@@ -13,7 +13,11 @@
     "mapping:prune": "node src/prune-product-mapping.js",
     "match:summary": "node src/matching-summary-report.js",
     "normalize:gastronom": "node src/normalize-from-gastronom.js",
-    "sync:gastronom": "node src/sync-shopify-gastronom.js"
+    "sync:gastronom": "node src/sync-shopify-gastronom.js",
+    "fetch:ubazar": "node src/fetch-products-all-ubazar.js",
+    "fetch:gastronom-uzbek": "node src/fetch-gastronom-uzbek-fruits-veg.js",
+    "match:ubazar": "npm run fetch:ubazar && npm run fetch:gastronom-uzbek",
+    "run:ubazar-automation": "node scripts/run-ubazar-automation-cli.js"
   },
   "keywords": [],
   "author": "",
