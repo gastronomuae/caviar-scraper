@@ -9,7 +9,7 @@ cd /home/fullevqf/caviar-scraper
 cp data/product_mapping.json /tmp/caviar-mapping.bak 2>/dev/null || true
 cp data/match_review_state.json /tmp/caviar-state.bak 2>/dev/null || true
 
-git fetch origin
+git fetch origin 2>/dev/null || true
 git checkout -- . 2>/dev/null || true
 git reset --hard origin/main
 
@@ -18,7 +18,7 @@ cp /tmp/caviar-mapping.bak data/product_mapping.json 2>/dev/null || true
 cp /tmp/caviar-state.bak data/match_review_state.json 2>/dev/null || true
 
 source /home/fullevqf/nodevenv/caviar-scraper/20/bin/activate
-npm install
+npm install --prefer-offline 2>/dev/null || npm install
 
 mkdir -p tmp
 touch tmp/restart.txt
@@ -35,7 +35,7 @@ if [ -d /home/fullevqf/ubazar-scraper ]; then
     # Save live ubazar mapping before reset
     cp data/ubazar_product_mapping.json /tmp/ubazar-mapping.bak 2>/dev/null || true
 
-    git fetch origin
+    git fetch origin 2>/dev/null || true
     git checkout -- . 2>/dev/null || true
     git reset --hard origin/main
 
@@ -49,7 +49,7 @@ if [ -d /home/fullevqf/ubazar-scraper ]; then
       source /home/fullevqf/nodevenv/caviar-scraper/20/bin/activate
     fi
 
-    npm install
+    npm install --prefer-offline 2>/dev/null || npm install
     mkdir -p tmp
     touch tmp/restart.txt
     echo "[deploy] ubazar-scraper deployed OK"
