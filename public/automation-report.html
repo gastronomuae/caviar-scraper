@@ -87,8 +87,8 @@
       <button type="button" onclick="load()">Refresh</button>
       <label class="meta" for="run-select">Run:</label>
       <select id="run-select" onchange="loadSelectedRun(this.value)" style="background:#0f1419;color:#e7ecf3;border:1px solid #3d4f6f;border-radius:6px;padding:6px 8px;min-width:280px;"></select>
-      <a class="meta" href="/api/automation/last-run.txt" target="_blank" rel="noopener noreferrer">Open text log</a>
-      <a class="meta" href="/api/automation/last-run" target="_blank" rel="noopener noreferrer">Open JSON</a>
+      <a class="meta" id="txt-link" href="/api/automation/last-run.txt" target="_blank" rel="noopener noreferrer">Open text log</a>
+      <a class="meta" id="json-link" href="/api/automation/last-run" target="_blank" rel="noopener noreferrer">Open JSON</a>
       <span class="meta" id="status"></span>
     </div>
 
@@ -110,6 +110,27 @@
   </main>
 
   <script>
+    const modeParam = new URLSearchParams(location.search).get('mode');
+    const MODE = modeParam === 'ubazar' || location.hostname.includes('ubazar') ? 'ubazar' : 'default';
+
+    const API = {
+      history:      MODE === 'ubazar' ? '/api/ubazar/automation/history' : '/api/automation/history',
+      historyById:  MODE === 'ubazar' ? '/api/ubazar/automation/history/' : '/api/automation/history/',
+      lastRunJson:  MODE === 'ubazar' ? '/api/ubazar/automation/last-run' : '/api/automation/last-run',
+      deltaHistory: MODE === 'ubazar' ? null : '/api/supplier-delta/history'
+    };
+
+    if (MODE === 'ubazar') {
+      document.title = 'UBazar automation report';
+      document.querySelector('header h1').textContent = 'UBazar automation report';
+      document.querySelector('a[href="/"]').href = '/?mode=ubazar';
+      document.getElementById('supplier-delta-history').querySelector('h2').textContent = 'Supplier delta history';
+    }
+
+    // Update JSON link
+    document.getElementById('json-link').href = API.lastRunJson;
+    if (MODE === 'ubazar') document.getElementById('txt-link').style.display = 'none';
+
     let runHistoryEntries = [];
 
     function escapeHtml(t) {
@@ -119,167 +140,147 @@
     }
 
     function findStep(run, name) {
-      const steps = Array.isArray(run?.steps) ? run.steps : [];
-      return steps.find(s => s && s.step === name) || null;
+      return (Array.isArray(run?.steps) ? run.steps : []).find(s => s && s.step === name) || null;
     }
 
-    function table(items) {
+    function caviarSyncTable(items) {
       if (!items || items.length === 0) return '<div class="meta" style="margin-top:10px;">—</div>';
-      return `
-        <table>
-          <thead>
-            <tr>
-              <th>Supplier</th>
-              <th>Handle</th>
-              <th>Shopify product</th>
-              <th>Applied</th>
-              <th>Changes</th>
-              <th>Auto-activated?</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${items.map(i => {
-              const a = i.applied || {};
-              const applied = a
-                ? `${a.bulk_update_rows ?? 0} updates, ${a.inventory_rows ?? 0} inventory, ${a.option_values_added ?? 0} option values, ${a.reorder_moved_rows ?? 0} reorders`
-                : '—';
-              const changes = Array.isArray(i.variant_changes) ? i.variant_changes : [];
-              const changedText = changes.length
-                ? changes
-                    .map((c) => {
-                      const weight = `${c.grams ?? '?'}g`;
-                      const price = `${c.price_from ?? '—'} -> ${c.price_to ?? '—'}`;
-                      const qty = `${c.qty_from ?? '—'} -> ${c.qty_to ?? '—'}`;
-                      const policy = `${c.inventory_policy_from ?? '—'} -> ${c.inventory_policy_to ?? '—'}`;
-                      return `${weight}: price ${price}, qty ${qty}, policy ${policy}`;
-                    })
-                    .join(' | ')
-                : '—';
-              return `
-                <tr>
-                  <td>
-                    <strong>${escapeHtml(i.supplier_name || '')}</strong><br/>
-                    ${i.supplier_url ? `<a href="${escapeHtml(i.supplier_url)}" target="_blank" rel="noopener noreferrer">open</a>` : '<span class="meta">—</span>'}
-                  </td>
-                  <td><code>${escapeHtml(i.source_handle || '')}</code></td>
-                  <td><code>${escapeHtml(i.shopify_product_id || '')}</code></td>
-                  <td class="meta">${escapeHtml(applied)}</td>
-                  <td class="meta">${escapeHtml(changedText)}</td>
-                  <td>${i.set_active_after_sync ? '<span class="pill ok">yes</span>' : '<span class="pill">no</span>'}</td>
-                </tr>
-              `;
-            }).join('')}
-          </tbody>
-        </table>
-      `;
+      return `<table><thead><tr><th>Supplier</th><th>Handle</th><th>Shopify product</th><th>Applied</th><th>Changes</th><th>Auto-activated?</th></tr></thead><tbody>
+        ${items.map(i => {
+          const a = i.applied || {};
+          const applied = `${a.bulk_update_rows ?? 0} updates, ${a.inventory_rows ?? 0} inventory, ${a.option_values_added ?? 0} option values, ${a.reorder_moved_rows ?? 0} reorders`;
+          const changes = Array.isArray(i.variant_changes) ? i.variant_changes : [];
+          const changedText = changes.length ? changes.map(c => `${c.grams ?? '?'}g: price ${c.price_from ?? '—'} -> ${c.price_to ?? '—'}, qty ${c.qty_from ?? '—'} -> ${c.qty_to ?? '—'}, policy ${c.inventory_policy_from ?? '—'} -> ${c.inventory_policy_to ?? '—'}`).join(' | ') : '—';
+          return `<tr>
+            <td><strong>${escapeHtml(i.supplier_name || '')}</strong><br/>${i.supplier_url ? `<a href="${escapeHtml(i.supplier_url)}" target="_blank">open</a>` : '<span class="meta">—</span>'}</td>
+            <td><code>${escapeHtml(i.source_handle || '')}</code></td>
+            <td><code>${escapeHtml(i.shopify_product_id || '')}</code></td>
+            <td class="meta">${escapeHtml(applied)}</td>
+            <td class="meta">${escapeHtml(changedText)}</td>
+            <td>${i.set_active_after_sync ? '<span class="pill ok">yes</span>' : '<span class="pill">no</span>'}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>`;
+    }
+
+    function ubazarSyncTable(items) {
+      if (!items || items.length === 0) return '<div class="meta" style="margin-top:10px;">—</div>';
+      return `<table><thead><tr><th>UBazar handle</th><th>Gastronom handle</th><th>Status after</th><th>Price after</th><th>Policy after</th></tr></thead><tbody>
+        ${items.map(i => {
+          const after = i.after || {};
+          return `<tr>
+            <td><code>${escapeHtml(i.source_handle || '')}</code></td>
+            <td><code>${escapeHtml(i.gastronom_handle || '')}</code></td>
+            <td>${escapeHtml(after.status || '—')}</td>
+            <td>${escapeHtml(String(after.price ?? '—'))}</td>
+            <td>${escapeHtml(after.inventoryPolicy || '—')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>`;
     }
 
     function deltaHistoryTable(entries) {
       if (!entries || entries.length === 0) return '<div class="meta" style="margin-top:10px;">—</div>';
-      return `
-        <table>
-          <thead>
-            <tr>
-              <th>Run started</th>
-              <th>Added</th>
-              <th>Updated</th>
-              <th>Removed</th>
-              <th>Variant OK</th>
-              <th>Variant failed</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${entries
-              .map((e) => {
-                const c = e.supplier_delta_counts || {};
-                return `
-                  <tr>
-                    <td>${escapeHtml(e.started_at || '')}</td>
-                    <td>${escapeHtml(String(c.added ?? 0))}</td>
-                    <td>${escapeHtml(String(c.updated ?? 0))}</td>
-                    <td>${escapeHtml(String(c.removed ?? 0))}</td>
-                    <td>${escapeHtml(String(e.variant_sync_ok ?? '—'))}</td>
-                    <td>${escapeHtml(String(e.variant_sync_failed ?? '—'))}</td>
-                  </tr>
-                `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      `;
+      return `<table><thead><tr><th>Run started</th><th>Added</th><th>Updated</th><th>Removed</th><th>Sync OK</th><th>Sync failed</th></tr></thead><tbody>
+        ${entries.map(e => {
+          const c = e.supplier_delta_counts || e.counts || {};
+          return `<tr>
+            <td>${escapeHtml(e.started_at || '')}</td>
+            <td>${escapeHtml(String(c.added ?? c.supplier_delta_added ?? 0))}</td>
+            <td>${escapeHtml(String(c.updated ?? c.supplier_delta_updated ?? 0))}</td>
+            <td>${escapeHtml(String(c.removed ?? c.supplier_delta_removed ?? 0))}</td>
+            <td>${escapeHtml(String(e.variant_sync_ok ?? c.variant_sync_ok ?? '—'))}</td>
+            <td>${escapeHtml(String(e.variant_sync_failed ?? c.variant_sync_failed ?? '—'))}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>`;
     }
 
     function renderRun(run) {
       const c = run.counts || {};
       document.getElementById('hdr').textContent = run.started_at ? `Started ${run.started_at}` : '';
-      document.getElementById('summary').innerHTML = `
-        <div class="meta">Result: <strong>${run.ok ? 'OK' : 'FAILED'}</strong></div>
-        <div class="meta" style="margin-top:8px;">
-          Supplier latest: <code>${escapeHtml(String(c.supplier_latest_products ?? 0))}</code> ·
-          Supplier updated: <code>${escapeHtml(String(c.supplier_delta_updated ?? 0))}</code> ·
-          Drafted: <code>${escapeHtml(String(c.drafted_unpaired_active ?? 0))}</code> (failed <code>${escapeHtml(String(c.drafted_failures ?? 0))}</code>) ·
-          Variant sync OK: <code>${escapeHtml(String(c.variant_sync_ok ?? 0))}</code> (failed <code>${escapeHtml(String(c.variant_sync_failed ?? 0))}</code>)
-        </div>
-      `;
-      const step = findStep(run, 'variant_sync_mapped_updates');
-      const items = Array.isArray(step?.ok_items) ? step.ok_items : [];
-      document.getElementById('synced-meta').textContent = `Targets: ${step?.targets ?? 0} · OK: ${items.length} · Failed: ${step?.failed_count ?? 0}`;
-      document.getElementById('tbl').innerHTML = table(items);
+      if (MODE === 'ubazar') {
+        document.getElementById('summary').innerHTML = `
+          <div class="meta">Result: <strong>${run.ok ? 'OK' : 'FAILED'}</strong></div>
+          <div class="meta" style="margin-top:8px;">
+            Products scraped: <code>${c.ubazar_latest_products ?? 0}</code> ·
+            Delta: <code>+${c.supplier_delta_added ?? 0} ~${c.supplier_delta_updated ?? 0} -${c.supplier_delta_removed ?? 0}</code> ·
+            Activated: <code>${c.mapped_activated ?? 0}</code> ·
+            Drafted mapped: <code>${c.mapped_drafted ?? 0}</code> ·
+            Drafted unpaired: <code>${c.drafted_unpaired_gastronom ?? 0}</code> (failed <code>${c.drafted_unpaired_failed ?? 0}</code>) ·
+            Sync OK: <code>${c.variant_sync_ok ?? 0}</code> (failed <code>${c.variant_sync_failed ?? 0}</code>)
+          </div>`;
+        const step = findStep(run, 'sync_mapped_products');
+        const synced = Array.isArray(step?.synced) ? step.synced : [];
+        document.getElementById('synced-meta').textContent = `Activated: ${c.mapped_activated ?? 0} · Synced: ${synced.length} · Failed: ${c.variant_sync_failed ?? 0}`;
+        document.getElementById('tbl').innerHTML = ubazarSyncTable(synced);
+
+        // Delta from run steps
+        const deltaStep = findStep(run, 'supplier_delta');
+        const deltaEntries = deltaStep ? [{ started_at: run.started_at, counts: c }] : [];
+        document.getElementById('supplier-delta-history-meta').textContent = `This run`;
+        document.getElementById('supplier-delta-history-table').innerHTML = deltaHistoryTable(deltaEntries);
+      } else {
+        document.getElementById('summary').innerHTML = `
+          <div class="meta">Result: <strong>${run.ok ? 'OK' : 'FAILED'}</strong></div>
+          <div class="meta" style="margin-top:8px;">
+            Supplier latest: <code>${c.supplier_latest_products ?? 0}</code> ·
+            Supplier updated: <code>${c.supplier_delta_updated ?? 0}</code> ·
+            Drafted: <code>${c.drafted_unpaired_active ?? 0}</code> (failed <code>${c.drafted_failures ?? 0}</code>) ·
+            Variant sync OK: <code>${c.variant_sync_ok ?? 0}</code> (failed <code>${c.variant_sync_failed ?? 0}</code>)
+          </div>`;
+        const step = findStep(run, 'variant_sync_mapped_updates');
+        const items = Array.isArray(step?.ok_items) ? step.ok_items : [];
+        document.getElementById('synced-meta').textContent = `Targets: ${step?.targets ?? 0} · OK: ${items.length} · Failed: ${step?.failed_count ?? 0}`;
+        document.getElementById('tbl').innerHTML = caviarSyncTable(items);
+      }
     }
 
     function renderRunSelect(entries, selectedId) {
       const sel = document.getElementById('run-select');
-      const arr = Array.isArray(entries) ? entries : [];
-      sel.innerHTML = arr
-        .map((e) => {
-          const id = String(e.id || '');
-          const txt = `${e.started_at || id} ${e.ok ? 'OK' : 'FAILED'}`;
-          const selected = id === selectedId ? ' selected' : '';
-          return `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(txt)}</option>`;
-        })
-        .join('');
+      sel.innerHTML = (Array.isArray(entries) ? entries : []).map(e => {
+        const id = String(e.id || '');
+        return `<option value="${escapeHtml(id)}"${id === selectedId ? ' selected' : ''}>${escapeHtml(`${e.started_at || id} ${e.ok ? 'OK' : 'FAILED'}`)}</option>`;
+      }).join('');
     }
 
     async function loadSelectedRun(runId) {
       const status = document.getElementById('status');
       if (!runId) return;
       status.textContent = 'Loading run…';
-      const res = await fetch('/api/automation/history/' + encodeURIComponent(runId));
+      const res = await fetch(API.historyById + encodeURIComponent(runId));
       const text = await res.text();
       if (!res.ok) {
         status.textContent = '';
         document.getElementById('summary').innerHTML = `<div><strong>Run not found</strong></div><div class="meta" style="margin-top:8px;">${escapeHtml(text)}</div>`;
         return;
       }
-      const run = JSON.parse(text);
-      renderRun(run);
+      renderRun(JSON.parse(text));
       status.textContent = '';
     }
 
     async function load() {
       const status = document.getElementById('status');
       status.textContent = 'Loading…';
-      const hRuns = await fetch('/api/automation/history?limit=30');
+      const hRuns = await fetch(API.history + '?limit=30');
       const jRuns = await hRuns.json();
       runHistoryEntries = Array.isArray(jRuns?.entries) ? jRuns.entries : [];
       const selected = runHistoryEntries[0]?.id || '';
       renderRunSelect(runHistoryEntries, selected);
-      if (selected) {
-        await loadSelectedRun(selected);
-      }
+      if (selected) await loadSelectedRun(selected);
 
-      // Supplier delta history table (dynamics over time)
-      try {
-        const hres = await fetch('/api/supplier-delta/history?limit=14');
-        const hj = await hres.json();
-        const entries = Array.isArray(hj?.entries) ? hj.entries : [];
-        document.getElementById('supplier-delta-history-meta').textContent = `Showing last ${entries.length} runs`;
-        document.getElementById('supplier-delta-history-table').innerHTML = deltaHistoryTable(entries);
-      } catch (e) {
-        document.getElementById('supplier-delta-history-meta').textContent = 'History unavailable';
-        document.getElementById('supplier-delta-history-table').innerHTML = '<div class="meta" style="margin-top:10px;">—</div>';
+      if (API.deltaHistory) {
+        try {
+          const hres = await fetch(API.deltaHistory + '?limit=14');
+          const hj = await hres.json();
+          const entries = Array.isArray(hj?.entries) ? hj.entries : [];
+          document.getElementById('supplier-delta-history-meta').textContent = `Showing last ${entries.length} runs`;
+          document.getElementById('supplier-delta-history-table').innerHTML = deltaHistoryTable(entries);
+        } catch (e) {
+          document.getElementById('supplier-delta-history-meta').textContent = 'History unavailable';
+          document.getElementById('supplier-delta-history-table').innerHTML = '<div class="meta" style="margin-top:10px;">—</div>';
+        }
       }
-
       status.textContent = '';
     }
 

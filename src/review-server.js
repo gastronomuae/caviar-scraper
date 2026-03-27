@@ -2096,6 +2096,10 @@ app.get('/supplier-delta', (req, res) => {
 });
 
 app.get('/automation-report', (req, res) => {
+  const forceMode = process.env.UBAZAR_REDIRECT_MODE;
+  if (forceMode && !req.query.mode) {
+    return res.redirect(`/automation-report?mode=${encodeURIComponent(forceMode)}`);
+  }
   res.sendFile(path.join(PUBLIC, 'automation-report.html'));
 });
 
