@@ -26,3 +26,8 @@ Thumbs.db
 
 # Uncomment if exports should not be in the repo (PII / large files / webhook payloads)
 # Output/
+
+# Live server data — owned by the server, never pushed from local or overwritten by deploy
+data/product_mapping.json
+data/match_review_state.json
+data/ubazar_product_mapping.json
