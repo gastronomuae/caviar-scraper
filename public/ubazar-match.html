@@ -112,7 +112,15 @@
         <div class="line"><span class="status ${badge(r.status)}">${esc(r.status)}</span></div>
         <div class="line"><strong>${esc(s.name||'')}</strong></div>
         <div class="line meta">${esc(s.handle||'')}</div>
-        <div class="line">Price: ${Number.isFinite(Number(s.promotional_price))?Number(s.promotional_price).toFixed(2):'—'} AED</div>
+        <div class="line">${(()=>{
+          const promo = Number.isFinite(Number(s.promotional_price)) ? Number(s.promotional_price) : null;
+          const reg = Number.isFinite(Number(s.regular_price)) ? Number(s.regular_price) : null;
+          if (promo != null && reg != null && reg !== promo) {
+            return `Price: <strong>${promo.toFixed(2)} AED</strong> <span class="meta" style="text-decoration:line-through;">${reg.toFixed(2)} AED</span>`;
+          }
+          const price = promo ?? reg;
+          return `Price: <strong>${price != null ? price.toFixed(2) + ' AED' : '—'}</strong>`;
+        })()}</div>
         <div class="line">Availability: ${s.available===true?'in stock':s.available===false?'not available':'unknown'}</div>
         <div class="line">${s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">open</a>`:'—'}</div>
       `;
