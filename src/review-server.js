@@ -228,13 +228,15 @@ async function executeSingleVariantSyncFromUbazar({ sourceHandle, gastronomHandl
   if (!p?.id || !v?.id) throw new Error(`Target product has no variants: ${productGid}`);
 
   const updates = [{ id: v.id }];
-  // Price = regular (full) price; compareAtPrice = promotional (discounted) price from supplier.
-  // This shows the full price on Gastronom with the supplier's promo price as reference.
-  const price = ubazarPriceNumber(supplier.regular_price ?? supplier.promotional_price);
-  const compareAtPrice = ubazarPriceNumber(supplier.promotional_price);
+  // When supplier has a promotional (sale) price: price = promo (what customer pays),
+  // compareAtPrice = regular (original, shown crossed out). Standard Shopify sale display.
+  // When no promotional price: price = regular price, compareAtPrice cleared.
+  const promoPrice = ubazarPriceNumber(supplier.promotional_price);
+  const regularPrice = ubazarPriceNumber(supplier.regular_price);
+  const price = promoPrice ?? regularPrice;
   if (price != null) updates[0].price = price;
-  if (compareAtPrice != null && compareAtPrice !== price) {
-    updates[0].compareAtPrice = String(compareAtPrice);
+  if (promoPrice != null && regularPrice != null && regularPrice !== promoPrice) {
+    updates[0].compareAtPrice = String(regularPrice);
   } else {
     updates[0].compareAtPrice = null;
   }
