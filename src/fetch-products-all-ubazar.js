@@ -116,9 +116,12 @@ function parseProductFromPage(url, html) {
 
   const text = stripHtml(html);
   const prices = parsePrices(text);
-  const unavailable = /нет\s+в\s+наличии|out\s+of\s+stock/i.test(text);
+  // "Add to cart" takes priority — it is the strongest signal that the product is available.
+  // "Out of stock" text can appear elsewhere on the page (similar products, banners) so we
+  // only treat it as unavailable when "Add to cart" is NOT present.
   const addToCart = /add\s+to\s+cart|в\s+корзину/i.test(text);
-  const available = unavailable ? false : addToCart ? true : null;
+  const unavailable = !addToCart && /нет\s+в\s+наличии|out\s+of\s+stock/i.test(text);
+  const available = addToCart ? true : unavailable ? false : null;
 
   const slug = (() => {
     try {
