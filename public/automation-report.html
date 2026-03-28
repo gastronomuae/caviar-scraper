@@ -171,9 +171,9 @@
           return `<tr>
             <td><code>${escapeHtml(i.source_handle || '')}</code></td>
             <td><code>${escapeHtml(i.gastronom_handle || '')}</code></td>
-            <td>${escapeHtml(after.status || '—')}</td>
+            <td>${escapeHtml(after.product_status || after.status || '—')}</td>
             <td>${escapeHtml(String(after.price ?? '—'))}</td>
-            <td>${escapeHtml(after.inventoryPolicy || '—')}</td>
+            <td>${escapeHtml(after.inventory_policy || after.inventoryPolicy || '—')}</td>
           </tr>`;
         }).join('')}
       </tbody></table>`;
