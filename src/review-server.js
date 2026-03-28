@@ -228,8 +228,16 @@ async function executeSingleVariantSyncFromUbazar({ sourceHandle, gastronomHandl
   if (!p?.id || !v?.id) throw new Error(`Target product has no variants: ${productGid}`);
 
   const updates = [{ id: v.id }];
-  const price = ubazarPriceNumber(supplier.promotional_price ?? supplier.regular_price);
+  // Price = regular (full) price; compareAtPrice = promotional (discounted) price from supplier.
+  // This shows the full price on Gastronom with the supplier's promo price as reference.
+  const price = ubazarPriceNumber(supplier.regular_price ?? supplier.promotional_price);
+  const compareAtPrice = ubazarPriceNumber(supplier.promotional_price);
   if (price != null) updates[0].price = price;
+  if (compareAtPrice != null && compareAtPrice !== price) {
+    updates[0].compareAtPrice = String(compareAtPrice);
+  } else {
+    updates[0].compareAtPrice = null;
+  }
 
   let inventoryPolicy = null;
   let quantity = null;
@@ -247,7 +255,7 @@ async function executeSingleVariantSyncFromUbazar({ sourceHandle, gastronomHandl
     token,
     `mutation PVBulk($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
       productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants { id price inventoryPolicy }
+        productVariants { id price compareAtPrice inventoryPolicy }
         userErrors { field message }
       }
     }`,
