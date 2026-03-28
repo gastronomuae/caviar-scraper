@@ -46,6 +46,16 @@ function supplierUnitPrice(sv) {
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
 }
 
+// Returns regular_price as compareAtPrice when a promo price exists and differs — otherwise null (clears it).
+function supplierCompareAtPrice(sv) {
+  const promo = sv?.promotional_price != null ? parseFloat(String(sv.promotional_price).replace(/[^\d.]/g, '')) : null;
+  const reg = sv?.regular_price != null ? parseFloat(String(sv.regular_price).replace(/[^\d.]/g, '')) : null;
+  if (promo != null && Number.isFinite(promo) && reg != null && Number.isFinite(reg) && reg !== promo) {
+    return Math.round(reg * 100) / 100;
+  }
+  return null;
+}
+
 /** Mirrors review UI: unlimited vs limited vs out of stock. */
 function supplierPolicyAndQty(sv) {
   const out = Boolean(sv?.out_of_stock) || sv?.available === false;
@@ -134,6 +144,7 @@ function buildVariantSyncPlan(supplierProduct, productNorm) {
   for (const [g, sv] of supplierByGrams) {
     const shv = shopifyByGrams.get(g);
     const price = supplierUnitPrice(sv);
+    const compareAtPrice = supplierCompareAtPrice(sv);
     const { inventoryPolicy, quantity } = supplierPolicyAndQty(sv);
     if (shv) {
       toUpdate.push({
@@ -141,6 +152,7 @@ function buildVariantSyncPlan(supplierProduct, productNorm) {
         variantId: shv.id,
         inventoryItemId: shv.inventoryItem?.id || null,
         price,
+        compareAtPrice,
         inventoryPolicy,
         quantity
       });
@@ -149,6 +161,7 @@ function buildVariantSyncPlan(supplierProduct, productNorm) {
         grams: g,
         optionLabel: weightLabelRu(g),
         price,
+        compareAtPrice,
         inventoryPolicy,
         quantity
       });
@@ -271,7 +284,7 @@ async function productVariantsBulkUpdateChunk(token, productId, variantsInput) {
     token,
     `mutation PVBulk($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
       productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants { id price inventoryPolicy }
+        productVariants { id price compareAtPrice inventoryPolicy }
         userErrors { field message }
       }
     }`,
@@ -495,6 +508,7 @@ async function executeVariantSyncFromSupplier(productGid, supplierProduct, locat
         inventoryPolicy: c.inventoryPolicy
       };
       if (c.price != null) row.price = c.price;
+      row.compareAtPrice = c.compareAtPrice != null ? String(c.compareAtPrice) : null;
       return row;
     });
     await productVariantsBulkCreateRun(token, productNorm.id, creates);
@@ -524,6 +538,7 @@ async function executeVariantSyncFromSupplier(productGid, supplierProduct, locat
     if (!iid) iid = await getInventoryItemIdForVariant(token, vid);
     const row = { id: vid, inventoryPolicy: u.inventoryPolicy };
     if (u.price != null) row.price = u.price;
+    row.compareAtPrice = u.compareAtPrice != null ? String(u.compareAtPrice) : null;
     bulkInputs.push(row);
     invItems.push({ inventoryItemId: iid, quantity: u.quantity });
   }
