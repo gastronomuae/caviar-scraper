@@ -1539,6 +1539,36 @@ app.get('/api/ubazar/latest', (req, res) => {
   }
 });
 
+// Lightweight price-only sync: reuses last scraped data, pushes price+compareAtPrice to Shopify
+app.post('/api/ubazar/sync-variants', async (req, res) => {
+  try {
+    const mapping = loadUbazarMapping();
+    const ubazarProducts = readJsonSafe(UBAZAR_LATEST_JSON, []);
+    if (!Array.isArray(ubazarProducts) || ubazarProducts.length === 0) {
+      return res.status(400).json({ ok: false, error: 'No UBazar scraped data found. Run full automation first.' });
+    }
+    const ubazarByHandle = new Map(ubazarProducts.map((x) => [String(x?.handle || '').trim(), x]));
+    const synced = [];
+    const failed = [];
+    for (const [sourceHandle, gastroHandleRaw] of Object.entries(mapping || {})) {
+      const source = String(sourceHandle || '').trim();
+      const gastroHandle = String(gastroHandleRaw || '').trim();
+      if (!source || !gastroHandle) continue;
+      const sup = ubazarByHandle.get(source);
+      if (!sup || sup.available === false) continue; // skip unavailable — don't touch their price
+      try {
+        const out = await executeSingleVariantSyncFromUbazar({ sourceHandle: source, gastronomHandle: gastroHandle });
+        synced.push({ source_handle: source, gastronom_handle: gastroHandle, after: out?.after || null });
+      } catch (e) {
+        failed.push({ source_handle: source, gastronom_handle: gastroHandle, error: String(e.message || e) });
+      }
+    }
+    res.json({ ok: true, synced_count: synced.length, failed_count: failed.length, synced, failed });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 app.get('/api/ubazar/delta', (req, res) => {
   try {
     if (!fs.existsSync(UBAZAR_DELTA_JSON)) return res.status(404).json({ ok: false, error: 'No UBazar delta file yet.' });
