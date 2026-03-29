@@ -115,8 +115,7 @@ function normalizeApiProduct(p) {
 }
 
 /**
- * Fetch products from a category page by extracting the embedded Nuxt state.
- * Returns array of normalized products.
+ * Fetch all products from a category URL including all pages via Nuxt state extraction.
  */
 async function fetchCategoryProducts(url) {
   const html = await fetchText(url);
@@ -124,7 +123,26 @@ async function fetchCategoryProducts(url) {
   if (!state) throw new Error(`Could not parse Nuxt state from ${url}`);
   const raw = state?.pages?.products?.products;
   if (!Array.isArray(raw)) throw new Error(`No products array in Nuxt state for ${url}`);
-  return raw.map(normalizeApiProduct).filter(Boolean);
+
+  const products = raw.map(normalizeApiProduct).filter(Boolean);
+  const totalPages = Number(state?.pages?.products?.productsNumberOfPages || 1);
+
+  for (let page = 2; page <= Math.min(totalPages, 20); page++) {
+    try {
+      const sep = url.includes('?') ? '&' : '?';
+      const pagedHtml = await fetchText(`${url}${sep}page=${page}`);
+      const pagedState = parseNuxtState(pagedHtml);
+      const pagedRaw = pagedState?.pages?.products?.products;
+      if (!Array.isArray(pagedRaw) || pagedRaw.length === 0) break;
+      for (const p of pagedRaw.map(normalizeApiProduct).filter(Boolean)) {
+        products.push(p);
+      }
+    } catch (_) {
+      break;
+    }
+  }
+
+  return products;
 }
 
 function keyByHandle(row) {
@@ -182,15 +200,31 @@ async function fetchAllProducts() {
     }
   }
 
-  // Also fetch any mapped products not discovered via category pages (e.g. after remapping).
+  // For mapped products not found via category pages, try fetching their page directly.
+  // We check the previous snapshot for a known slug, then try to load that page by ID.
   const mapping = readJsonIfExistsSafe(MAPPING_PATH, {});
+  const prevProducts = readJsonIfExistsSafe(OUT, []);
+  const prevById = new Map((Array.isArray(prevProducts) ? prevProducts : []).map((p) => [String(p?.handle || ''), p]));
   const mappedIds = Object.keys(mapping || {}).map((k) => String(k).trim()).filter(Boolean);
+
   for (const id of mappedIds) {
     if (byId.has(id)) continue;
-    // Try to fetch the product's current page using the old slug if available,
-    // or construct a fallback URL from the mapped ID. Since we don't know the current slug,
-    // skip silently — it will appear as "missing" and the product will be drafted.
-    // The user can re-map using the review UI once the new slug is found.
+    // Try known slug from previous snapshot to build URL.
+    const prev = prevById.get(id);
+    const slug = prev?.slug || null;
+    if (!slug) continue;
+    const productUrl = `${BASE}/products/${slug}-${id}`;
+    try {
+      const html = await fetchText(productUrl);
+      const state = parseNuxtState(html);
+      const raw = state?.pages?.products?.singleProductForProductPage;
+      if (raw && raw.id) {
+        const normalized = normalizeApiProduct(raw);
+        if (normalized) byId.set(normalized.handle, normalized);
+      }
+    } catch (_) {
+      // Product gone — will be drafted.
+    }
   }
 
   try {
