@@ -1427,12 +1427,19 @@ app.post('/api/ubazar/run', async (req, res) => {
       const mappedFailed = [];
       const mappedSynced = [];
       const mappedSyncFailed = [];
+      // Track activated gastronom handles to prevent old slug-based mapping keys from
+      // overriding (drafting) a product that was just activated via its numeric key.
+      const alreadyActivatedHandles = new Set();
       for (const [sourceHandle, gastroHandleRaw] of Object.entries(mapping || {})) {
         const source = String(sourceHandle || '').trim();
         const gastroHandle = String(gastroHandleRaw || '').trim();
         if (!source || !gastroHandle) continue;
         const sup = ubazarByHandle.get(source) || null;
         const shouldDraft = !sup || sup.available === false;
+        // Skip drafting if this gastronom product was already activated in this run.
+        // This handles the case where both a numeric key ("2038") and an old slug key
+        // ("tomatoes-pink-paradise-500g-143") exist in the mapping for the same product.
+        if (shouldDraft && alreadyActivatedHandles.has(gastroHandle)) continue;
         try {
           const gid = await resolveShopifyProductGidByHandleLive(gastroHandle);
           if (!gid) throw new Error(`No Shopify product found by handle: ${gastroHandle}`);
@@ -1441,6 +1448,7 @@ app.post('/api/ubazar/run', async (req, res) => {
             draftedMapped.push({ source_handle: source, gastronom_handle: gastroHandle, reason: !sup ? 'missing_from_ubazar' : 'ubazar_unavailable' });
           } else {
             await setProductStatus(gid, 'ACTIVE');
+            alreadyActivatedHandles.add(gastroHandle);
             activatedMapped.push({ source_handle: source, gastronom_handle: gastroHandle });
             try {
               const out = await executeSingleVariantSyncFromUbazar({ sourceHandle: source, gastronomHandle: gastroHandle });

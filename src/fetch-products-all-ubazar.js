@@ -64,7 +64,7 @@ function parseNuxtState(html) {
   if (!m) return null;
   try {
     const sandbox = { __result: null };
-    vm.runInNewContext(`__result = ${m[1]}`, sandbox, { timeout: 5000 });
+    vm.runInNewContext(`__result = ${m[1]}`, sandbox, { timeout: 10000 });
     return sandbox.__result?.state || null;
   } catch (_) {
     return null;
@@ -200,30 +200,31 @@ async function fetchAllProducts() {
     }
   }
 
-  // For mapped products not found via category pages, try fetching their page directly.
-  // We check the previous snapshot for a known slug, then try to load that page by ID.
+  // For mapped products not found via category pages, fetch them directly from the UBazar API.
+  // This works even when the website SSR is down (e.g. rate-limiting itself with 429 errors).
   const mapping = readJsonIfExistsSafe(MAPPING_PATH, {});
   const prevProducts = readJsonIfExistsSafe(OUT, []);
-  const prevById = new Map((Array.isArray(prevProducts) ? prevProducts : []).map((p) => [String(p?.handle || ''), p]));
-  const mappedIds = Object.keys(mapping || {}).map((k) => String(k).trim()).filter(Boolean);
 
-  for (const id of mappedIds) {
+  // Collect all known numeric IDs from mapping + previous snapshot
+  const knownIds = new Set([
+    ...Object.keys(mapping || {}).filter(k => /^\d+$/.test(String(k).trim())),
+    ...(Array.isArray(prevProducts) ? prevProducts : []).map(p => String(p?.handle || '')).filter(k => /^\d+$/.test(k))
+  ]);
+
+  for (const id of knownIds) {
     if (byId.has(id)) continue;
-    // Try known slug from previous snapshot to build URL.
-    const prev = prevById.get(id);
-    const slug = prev?.slug || null;
-    if (!slug) continue;
-    const productUrl = `${BASE}/products/${slug}-${id}`;
     try {
-      const html = await fetchText(productUrl);
-      const state = parseNuxtState(html);
-      const raw = state?.pages?.products?.singleProductForProductPage;
-      if (raw && raw.id) {
-        const normalized = normalizeApiProduct(raw);
+      const { data } = await axios.get(`https://apiv2.ubazar.ae/api/product/${id}`, {
+        timeout: 15000,
+        headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' }
+      });
+      const prod = data?.message?.product;
+      if (prod && prod.id) {
+        const normalized = normalizeApiProduct(prod);
         if (normalized) byId.set(normalized.handle, normalized);
       }
     } catch (_) {
-      // Product gone — will be drafted.
+      // Product gone or API unavailable — will be drafted.
     }
   }
 
