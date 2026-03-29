@@ -1508,7 +1508,10 @@ app.post('/api/ubazar/run', async (req, res) => {
             alreadyActivatedHandles.add(gastroHandle);
             activatedMapped.push({ source_handle: source, gastronom_handle: gastroHandle });
             try {
-              const out = await executeSingleVariantSyncFromUbazar({ sourceHandle: source, gastronomHandle: gastroHandle });
+              // Use sup.handle (numeric ID from cache) not source (mapping key which may be old slug).
+              // Old slug keys like "eggplant-500g-1670" would fail cache lookup; "1670" works.
+              const syncHandle = sup?.handle || source;
+              const out = await executeSingleVariantSyncFromUbazar({ sourceHandle: syncHandle, gastronomHandle: gastroHandle });
               mappedSynced.push({ source_handle: source, gastronom_handle: gastroHandle, after: out?.after || null });
             } catch (se) {
               mappedSyncFailed.push({ source_handle: source, gastronom_handle: gastroHandle, error: String(se.message || se) });
