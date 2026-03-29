@@ -30,7 +30,7 @@ async function main() {
   const gid = `gid://shopify/Collection/${id}`;
   const data = await graphql(
     token,
-    'query($id: ID!){ collection(id:$id){ id title productsCount { count } } }',
+    'query($id: ID!){ collection(id:$id){ id title productsCount(limit: null) { count } } }',
     { id: gid }
   );
   if (!data?.collection?.id) {
