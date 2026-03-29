@@ -1383,47 +1383,68 @@ app.post('/api/ubazar/run', async (req, res) => {
       const snap = saveUbazarSnapshot();
       result.steps.push({ step: 'ubazar_snapshot_before', ok: true, ...snap });
 
-      // Step 3: scrape UBazar
-      const r = await execNodeScript(path.join(__dirname, '..', 'src', 'fetch-products-all-ubazar.js'));
-      result.steps.push({ step: 'ubazar_scrape', ok: true, ...r });
+      // Step 3: scrape UBazar — retry up to 3 times (30s apart) if confidence check fails
+      const MAX_SCRAPE_ATTEMPTS = 3;
+      const RETRY_DELAY_MS = 30000;
+      let ubazarAfter = [];
+      let scrapeAttempt = 0;
+      let confidencePassed = false;
+      let confidenceReason = '';
+      let mappedFound = 0;
+      let totalMapped = 0;
+
+      while (scrapeAttempt < MAX_SCRAPE_ATTEMPTS) {
+        scrapeAttempt++;
+        if (scrapeAttempt > 1) {
+          result.warnings.push(`Scrape attempt ${scrapeAttempt}: retrying after ${RETRY_DELAY_MS / 1000}s (previous attempt had low confidence)`);
+          await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        }
+        const r = await execNodeScript(path.join(__dirname, '..', 'src', 'fetch-products-all-ubazar.js'));
+        result.steps.push({ step: `ubazar_scrape${scrapeAttempt > 1 ? `_retry${scrapeAttempt - 1}` : ''}`, ok: true, attempt: scrapeAttempt, ...r });
+
+        ubazarAfter = readJsonSafe(UBAZAR_LATEST_JSON, []);
+        const totalScraped = Array.isArray(ubazarAfter) ? ubazarAfter.length : 0;
+
+        // Confidence check
+        const mappingForCheck = loadUbazarMapping();
+        const mappedSourceIds = Object.keys(mappingForCheck || {}).map(k => String(k).trim()).filter(Boolean);
+        const scrapedHandles = new Set((Array.isArray(ubazarAfter) ? ubazarAfter : []).map(x => String(x?.handle || '').trim()));
+        mappedFound = mappedSourceIds.filter(id => {
+          if (scrapedHandles.has(id)) return true;
+          const num = id.match(/-(\d+)$/)?.[1];
+          return num ? scrapedHandles.has(num) : false;
+        }).length;
+        totalMapped = mappedSourceIds.length;
+        const MIN_ABSOLUTE = 10;
+        const MIN_MAPPED_RATIO = 0.6;
+        const mappedRatio = totalMapped > 0 ? mappedFound / totalMapped : 1;
+
+        if (totalScraped >= MIN_ABSOLUTE && (totalMapped === 0 || mappedRatio >= MIN_MAPPED_RATIO)) {
+          confidencePassed = true;
+          result.steps.push({ step: 'confidence_check', ok: true, attempt: scrapeAttempt, scraped: totalScraped, mapped_found: mappedFound, total_mapped: totalMapped, ratio: Math.round(mappedRatio * 100) + '%' });
+          break;
+        }
+        confidenceReason = totalScraped < MIN_ABSOLUTE
+          ? `Only ${totalScraped} products scraped (minimum ${MIN_ABSOLUTE})`
+          : `Only ${mappedFound}/${totalMapped} mapped products found (${Math.round(mappedRatio * 100)}%, minimum 60%)`;
+        result.steps.push({ step: 'confidence_check', ok: false, attempt: scrapeAttempt, reason: confidenceReason, scraped: totalScraped, mapped_found: mappedFound, total_mapped: totalMapped });
+      }
+
+      if (!confidencePassed) {
+        result.warnings.push(`Aborted before Shopify changes after ${MAX_SCRAPE_ATTEMPTS} attempts: ${confidenceReason}`);
+        result.aborted = true;
+        result.finished_at = new Date().toISOString();
+        try { result.report_paths = writeUbazarAutomationArtifacts(result); } catch (_) {}
+        return result;
+      }
 
       // Step 4: compute supplier delta
-      const ubazarAfter = readJsonSafe(UBAZAR_LATEST_JSON, []);
       result.counts.ubazar_latest_products = Array.isArray(ubazarAfter) ? ubazarAfter.length : 0;
       const delta = diffUbazarSnapshots(Array.isArray(ubazarBefore) ? ubazarBefore : [], Array.isArray(ubazarAfter) ? ubazarAfter : []);
       result.counts.supplier_delta_added = delta.added.length;
       result.counts.supplier_delta_removed = delta.removed.length;
       result.counts.supplier_delta_updated = delta.updated.length;
       result.steps.push({ step: 'supplier_delta', ok: true, counts: { added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length }, delta });
-
-      // Confidence check: abort before touching Shopify if the scrape looks unreliable.
-      // This prevents mass-drafting all products when UBazar is temporarily down.
-      const mappingForCheck = loadUbazarMapping();
-      const mappedSourceIds = Object.keys(mappingForCheck || {}).map(k => String(k).trim()).filter(Boolean);
-      const scrapedHandles = new Set((Array.isArray(ubazarAfter) ? ubazarAfter : []).map(x => String(x?.handle || '').trim()));
-      const mappedFound = mappedSourceIds.filter(id => {
-        if (scrapedHandles.has(id)) return true;
-        // Also check via trailing numeric suffix for old slug keys
-        const num = id.match(/-(\d+)$/)?.[1];
-        return num ? scrapedHandles.has(num) : false;
-      }).length;
-      const totalMapped = mappedSourceIds.length;
-      const totalScraped = result.counts.ubazar_latest_products;
-      const MIN_ABSOLUTE = 10;
-      const MIN_MAPPED_RATIO = 0.6;
-      const mappedRatio = totalMapped > 0 ? mappedFound / totalMapped : 1;
-      if (totalScraped < MIN_ABSOLUTE || (totalMapped > 0 && mappedRatio < MIN_MAPPED_RATIO)) {
-        const reason = totalScraped < MIN_ABSOLUTE
-          ? `Only ${totalScraped} products scraped (minimum ${MIN_ABSOLUTE})`
-          : `Only ${mappedFound}/${totalMapped} mapped products found (${Math.round(mappedRatio * 100)}%, minimum 60%)`;
-        result.steps.push({ step: 'confidence_check', ok: false, aborted: true, reason, scraped: totalScraped, mapped_found: mappedFound, total_mapped: totalMapped });
-        result.warnings.push(`Aborted before Shopify changes: ${reason}`);
-        result.aborted = true;
-        result.finished_at = new Date().toISOString();
-        try { result.report_paths = writeUbazarAutomationArtifacts(result); } catch (_) {}
-        return result;
-      }
-      result.steps.push({ step: 'confidence_check', ok: true, scraped: totalScraped, mapped_found: mappedFound, total_mapped: totalMapped, ratio: Math.round(mappedRatio * 100) + '%' });
 
       // Step 5: draft UNPAIRED Gastronom products (not mapped to any UBazar item)
       const mapping = loadUbazarMapping();

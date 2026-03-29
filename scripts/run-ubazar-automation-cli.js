@@ -77,6 +77,8 @@ function buildText(run) {
     'Summary',
     `- UBazar products scraped: ${c.ubazar_latest_products ?? 0}`,
   ];
+  const retries = (run.steps || []).filter(s => s.step && s.step.startsWith('ubazar_scrape_retry')).length;
+  if (retries > 0) lines.push(`- Scrape retried ${retries} time(s) before passing confidence check`);
   if (run.aborted) {
     const w = (run.warnings || []).join('; ');
     lines.push(`- *** ABORTED before Shopify changes: ${w}`);

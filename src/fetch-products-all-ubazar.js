@@ -27,6 +27,22 @@ const TARGET_CATEGORY_URLS = [
   `${BASE}/categories/dried-fruitsnuts-36`,
 ];
 
+// Known product IDs that are always fetched via direct API regardless of category scraping.
+// Use this for products that live on page 2+ of category pages (UBazar SSR only embeds page 1
+// in the Nuxt state, so paginated products are invisible to the HTML scraper).
+const SEED_PRODUCT_IDS = [
+  '118',  // Beet 500g
+  '119',  // Radish green 500g
+  '148',  // Potatoes red 500g
+  '665',  // Potato 500g
+  '985',  // Cabbage head 1kg
+  '1670', // Eggplant 500g
+  '2687', // Butternut Pumpkin 1kg
+  '2688', // White Onion 500g
+  '2696', // Red Onion 500g
+  '757',  // Green onion 100g
+];
+
 function readJsonIfExistsSafe(p, fallback) {
   try {
     if (!fs.existsSync(p)) return fallback;
@@ -205,8 +221,9 @@ async function fetchAllProducts() {
   const mapping = readJsonIfExistsSafe(MAPPING_PATH, {});
   const prevProducts = readJsonIfExistsSafe(OUT, []);
 
-  // Collect all known numeric IDs from mapping + previous snapshot
+  // Collect all known numeric IDs from: seed list + mapping + previous snapshot
   const knownIds = new Set([
+    ...SEED_PRODUCT_IDS,
     ...Object.keys(mapping || {}).filter(k => /^\d+$/.test(String(k).trim())),
     ...(Array.isArray(prevProducts) ? prevProducts : []).map(p => String(p?.handle || '')).filter(k => /^\d+$/.test(k))
   ]);
