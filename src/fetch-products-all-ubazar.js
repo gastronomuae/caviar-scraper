@@ -110,7 +110,10 @@ function normalizeApiProduct(p) {
   const regular_price = hasValidOldPrice ? oldPriceRaw : (hasValidPrice ? priceRaw : null);
 
   const inStock = p.in_stock != null ? Number(p.in_stock) : null;
-  const available = p.active === 'yes' && (inStock == null || inStock > 0);
+  // Use in_stock as the primary availability signal.
+  // active=no with stock > 0 still means available (UBazar may use active as a display toggle).
+  // Only mark unavailable when stock is explicitly 0 (and not null/undefined).
+  const available = inStock == null ? p.active === 'yes' : inStock > 0;
 
   let image = p.image || null;
   if (image && !image.startsWith('http')) {

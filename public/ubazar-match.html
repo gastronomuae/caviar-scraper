@@ -89,9 +89,10 @@
   <script>
     let rowsAll = [], rows = [], idx = 0, selectedHandle = null, manualPick = null, filter='needs_review', hits = [];
     function extractWeight(name) {
-      const m = String(name||'').match(/(\d+(?:\.\d+)?)\s*(kg|g)\b/i);
+      const m = String(name||'').match(/(\d+(?:\.\d+)?)\s*(кг|kg|г|g)\b/i);
       if (!m) return null;
-      return m[2].toLowerCase()==='kg' ? Math.round(parseFloat(m[1])*1000)+' g' : m[1]+' g';
+      const u = m[2].toLowerCase();
+      return (u==='kg'||u==='кг') ? Math.round(parseFloat(m[1])*1000)+' g' : parseFloat(m[1])+' g';
     }
     function esc(t){const d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML;}
     function badge(s){const x=String(s||''); if(x.includes('confirmed')) return 'ok'; if(x.includes('no match')) return 'bad'; return 'warn';}
@@ -144,7 +145,7 @@
       cards.push(...(r.suggestions||[]).map((g,i)=>`<div class="card" data-h="${esc(g.handle||'')}" onclick="selectCard(this)">
         <div><strong>${esc(g.name||'')}</strong>${g.product_status==='ACTIVE'?` <span class="status ok">ACTIVE</span>`:g.product_status==='DRAFT'?` <span class="status bad">DRAFT</span>`:''}</div>
         <div class="meta">${esc(g.handle||'')}</div>
-        <div class="meta">Weight: ${g.weight_g!=null?g.weight_g+' g':'—'}</div>
+        <div class="meta">Weight: ${g.weight_g!=null ? g.weight_g+' g' : (extractWeight(g.name)||'—')}</div>
         <div class="score">score: ${esc(g.score??0)}</div>
         <div class="meta">${Number.isFinite(Number(g.price))?Number(g.price).toFixed(2)+' AED':'—'} · ${g.available===false?'not available':'in stock'}</div>
       </div>`));
