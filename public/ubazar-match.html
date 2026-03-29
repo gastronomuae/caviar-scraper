@@ -88,6 +88,11 @@
 
   <script>
     let rowsAll = [], rows = [], idx = 0, selectedHandle = null, manualPick = null, filter='needs_review', hits = [];
+    function extractWeight(name) {
+      const m = String(name||'').match(/(\d+(?:\.\d+)?)\s*(kg|g)\b/i);
+      if (!m) return null;
+      return m[2].toLowerCase()==='kg' ? Math.round(parseFloat(m[1])*1000)+' g' : m[1]+' g';
+    }
     function esc(t){const d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML;}
     function badge(s){const x=String(s||''); if(x.includes('confirmed')) return 'ok'; if(x.includes('no match')) return 'bad'; return 'warn';}
     function setFilter(f){filter=f; document.getElementById('f-no').classList.toggle('primary',f==='no_match'); document.getElementById('f-rev').classList.toggle('primary',f==='needs_review'); document.getElementById('f-ok').classList.toggle('primary',f==='confirmed'); document.getElementById('f-all').classList.toggle('primary',f==='all'); applyFilter();}
@@ -121,6 +126,7 @@
           const price = promo ?? reg;
           return `Price: <strong>${price != null ? price.toFixed(2) + ' AED' : '—'}</strong>`;
         })()}</div>
+        <div class="line">Weight: ${extractWeight(s.name)||'—'}</div>
         <div class="line">Availability: ${s.available===true?'in stock':s.available===false?'not available':'unknown'}</div>
         <div class="line">${s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">open</a>`:'—'}</div>
       `;
@@ -136,8 +142,9 @@
         selectedHandle = null;
       }
       cards.push(...(r.suggestions||[]).map((g,i)=>`<div class="card" data-h="${esc(g.handle||'')}" onclick="selectCard(this)">
-        <div><strong>${esc(g.name||'')}</strong></div>
+        <div><strong>${esc(g.name||'')}</strong>${g.product_status==='ACTIVE'?` <span class="status ok">ACTIVE</span>`:g.product_status==='DRAFT'?` <span class="status bad">DRAFT</span>`:''}</div>
         <div class="meta">${esc(g.handle||'')}</div>
+        <div class="meta">Weight: ${g.weight_g!=null?g.weight_g+' g':'—'}</div>
         <div class="score">score: ${esc(g.score??0)}</div>
         <div class="meta">${Number.isFinite(Number(g.price))?Number(g.price).toFixed(2)+' AED':'—'} · ${g.available===false?'not available':'in stock'}</div>
       </div>`));
