@@ -67,21 +67,30 @@ function postJson(targetUrl) {
 
 function buildText(run) {
   const c = run.counts || {};
-  return [
+  const confidenceStep = (run.steps || []).find(s => s.step === 'confidence_check');
+  const lines = [
     'UBazar automation run',
     `Started:  ${run.started_at || '—'}`,
     `Finished: ${run.finished_at || '—'}`,
-    `Result:   ${run.ok ? 'OK' : 'FAILED'}`,
+    `Result:   ${run.aborted ? 'ABORTED (low confidence)' : run.ok ? 'OK' : 'FAILED'}`,
     '',
     'Summary',
     `- UBazar products scraped: ${c.ubazar_latest_products ?? 0}`,
-    `- Supplier delta: +${c.supplier_delta_added ?? 0} added, ~${c.supplier_delta_updated ?? 0} updated, -${c.supplier_delta_removed ?? 0} removed`,
-    `- Unpaired Gastronom set to DRAFT: ${c.drafted_unpaired_gastronom ?? 0} (failed ${c.drafted_unpaired_failed ?? 0})`,
-    `- Mapped products activated: ${c.mapped_activated ?? 0}`,
-    `- Mapped products drafted (unavailable): ${c.mapped_drafted ?? 0}`,
-    `- Variant sync OK: ${c.variant_sync_ok ?? 0} (failed ${c.variant_sync_failed ?? 0})`,
-    ''
-  ].join('\n');
+  ];
+  if (run.aborted) {
+    const w = (run.warnings || []).join('; ');
+    lines.push(`- *** ABORTED before Shopify changes: ${w}`);
+    lines.push(`- Shopify was NOT modified. Run again when supplier site is stable.`);
+  } else {
+    if (confidenceStep) lines.push(`- Confidence check: ${confidenceStep.mapped_found}/${confidenceStep.total_mapped} mapped products found (${confidenceStep.ratio})`);
+    lines.push(`- Supplier delta: +${c.supplier_delta_added ?? 0} added, ~${c.supplier_delta_updated ?? 0} updated, -${c.supplier_delta_removed ?? 0} removed`);
+    lines.push(`- Unpaired Gastronom set to DRAFT: ${c.drafted_unpaired_gastronom ?? 0} (failed ${c.drafted_unpaired_failed ?? 0})`);
+    lines.push(`- Mapped products activated: ${c.mapped_activated ?? 0}`);
+    lines.push(`- Mapped products drafted (unavailable): ${c.mapped_drafted ?? 0}`);
+    lines.push(`- Variant sync OK: ${c.variant_sync_ok ?? 0} (failed ${c.variant_sync_failed ?? 0})`);
+  }
+  lines.push('');
+  return lines.join('\n');
 }
 
 (async () => {
