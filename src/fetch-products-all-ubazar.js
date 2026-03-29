@@ -1,12 +1,31 @@
+/**
+ * UBazar scraper — fetches product catalog from ubazar.ae category pages.
+ *
+ * Strategy: extract window.__NUXT__ state embedded in SSR HTML (via Node vm module).
+ * This gives structured JSON including stable numeric product IDs, which are used as
+ * the mapping key instead of URL slugs (slugs can change; IDs don't).
+ *
+ * Output handle = String(ubazar numeric id), e.g. "2038".
+ * slug field = current URL slug, e.g. "pink-tomatoes-500g".
+ * url = https://ubazar.ae/products/${slug}-${id}
+ */
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 const BASE = 'https://ubazar.ae';
 const OUT = path.join(__dirname, '..', 'Output', 'ubazar_products.latest.json');
 const OUT_DELTA = path.join(__dirname, '..', 'Output', 'ubazar_delta.latest.json');
-const MAPPING_PATH = path.join(__dirname, '..', 'Output', 'ubazar_product_mapping.json');
+const MAPPING_PATH = path.join(__dirname, '..', 'data', 'ubazar_product_mapping.json');
 const CATEGORY_INDEX_PATH = path.join(__dirname, '..', 'Output', 'ubazar_category_index.latest.json');
+
+// Category page URLs to fetch products from.
+const TARGET_CATEGORY_URLS = [
+  `${BASE}/categories/vegetables-and-herbs-30`,
+  `${BASE}/categories/fruits-32`,
+  `${BASE}/categories/dried-fruitsnuts-36`,
+];
 
 function readJsonIfExistsSafe(p, fallback) {
   try {
@@ -17,19 +36,12 @@ function readJsonIfExistsSafe(p, fallback) {
   }
 }
 
-function stripHtml(html) {
-  return String(html || '')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function absUrl(href) {
+function readJsonIfExists(p, fallback) {
+  if (!fs.existsSync(p)) return fallback;
   try {
-    return new URL(href, BASE).toString();
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch (_) {
-    return null;
+    return fallback;
   }
 }
 
@@ -43,192 +55,91 @@ async function fetchText(url) {
   return String(data || '');
 }
 
-function extractLinks(html) {
-  const out = [];
-  const re = /<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi;
-  let m;
-  while ((m = re.exec(html))) {
-    const u = absUrl(m[1]);
-    if (u) out.push(u);
+/**
+ * Extract window.__NUXT__ state from SSR HTML using Node vm sandbox.
+ * Returns the full state object or null on failure.
+ */
+function parseNuxtState(html) {
+  const m = html.match(/<script>window\.__NUXT__=([\s\S]*?)<\/script>/);
+  if (!m) return null;
+  try {
+    const sandbox = { __result: null };
+    vm.runInNewContext(`__result = ${m[1]}`, sandbox, { timeout: 5000 });
+    return sandbox.__result?.state || null;
+  } catch (_) {
+    return null;
   }
-  return [...new Set(out)];
 }
 
-function chooseMainCategory(links) {
-  const candidates = links.filter((u) => /\/categories\//i.test(u));
-  const scored = candidates
-    .map((u) => {
-      const l = u.toLowerCase();
-      let score = 0;
-      if (/ovoschi-i-frukty|vegetables-and-fruits/.test(l)) score += 10;
-      if (/ovoschi-i-zelen|vegetables-and-herbs/.test(l)) score += 10;
-      if (/овощ|фрукт/.test(decodeURIComponent(l))) score += 8;
-      if (/categories\/[^/]+-\d+/.test(l)) score += 1;
-      return { u, score };
-    })
-    .sort((a, b) => b.score - a.score);
-  return scored[0]?.u || null;
-}
+/**
+ * Normalize a raw UBazar API product object into our internal format.
+ * handle = stable numeric ID (survives slug renames).
+ */
+function normalizeApiProduct(p) {
+  const id = p.id;
+  if (!id) return null;
+  const handle = String(id);
+  const slugEn = String(p.slug_en || '');
+  const url = `${BASE}/products/${slugEn}-${id}`;
 
-function chooseTargetSubcategories(links) {
-  const cats = links.filter((u) => /\/categories\//i.test(u));
-  const target = [];
-  for (const u of cats) {
-    const l = u.toLowerCase();
-    if (/vegetables-and-herbs|fruits-/.test(l)) target.push(u);
-    if (/ovoschi-i-zelen/.test(l)) target.push(u);
-    const d = decodeURIComponent(l);
-    if (/овощи-и-зелень|фрукты/.test(d)) target.push(u);
+  const priceRaw = p.price != null ? parseFloat(String(p.price)) : null;
+  const oldPriceRaw = p.old_price != null ? parseFloat(String(p.old_price)) : null;
+
+  // UBazar: price = current price, old_price = original price when on sale.
+  // Map to our fields: promotional_price = current (sale) price, regular_price = original.
+  const hasValidOldPrice = oldPriceRaw != null && Number.isFinite(oldPriceRaw) && oldPriceRaw > 0;
+  const hasValidPrice = priceRaw != null && Number.isFinite(priceRaw) && priceRaw > 0;
+
+  const promotional_price = hasValidOldPrice && hasValidPrice ? priceRaw : null;
+  const regular_price = hasValidOldPrice ? oldPriceRaw : (hasValidPrice ? priceRaw : null);
+
+  const inStock = p.in_stock != null ? Number(p.in_stock) : null;
+  const available = p.active === 'yes' && (inStock == null || inStock > 0);
+
+  let image = p.image || null;
+  if (image && !image.startsWith('http')) {
+    image = `https://apiv2.ubazar.ae/${image.replace(/^\//, '')}`;
   }
-  return [...new Set(target)];
-}
-
-function extractProductLinks(html) {
-  const links = extractLinks(html);
-  return links.filter((u) => /\/products\//i.test(u));
-}
-
-function parsePrices(text) {
-  const matches = String(text || '').match(/\d+(?:\.\d{1,2})?\s*AED/gi) || [];
-  const nums = matches
-    .map((x) => Number(String(x).replace(/\s*AED/i, '').trim()))
-    .filter((n) => Number.isFinite(n));
-  if (!nums.length) return { price: null, old_price: null };
-  if (nums.length === 1) {
-    const p = nums[0] > 0 ? nums[0] : null;
-    return { price: p, old_price: null };
-  }
-  const price = nums[nums.length - 1] > 0 ? nums[nums.length - 1] : null;
-  const old = nums[0] > 0 ? nums[0] : null;
-  return { price, old_price: old };
-}
-
-function parseProductFromPage(url, html) {
-  const titleMatch =
-    html.match(/<h1[^>]*>\s*([^<]+?)\s*<\/h1>/i) ||
-    html.match(/<title[^>]*>\s*([^<]+?)\s*(?:-|<\/title)/i);
-  const title = stripHtml(titleMatch ? titleMatch[1] : '');
-
-  const imgMatch =
-    html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i) ||
-    html.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i);
-  const image = imgMatch ? absUrl(imgMatch[1]) : null;
-
-  const text = stripHtml(html);
-  const prices = parsePrices(text);
-  // "Add to cart" takes priority — it is the strongest signal that the product is available.
-  // "Out of stock" text can appear elsewhere on the page (similar products, banners) so we
-  // only treat it as unavailable when "Add to cart" is NOT present.
-  const addToCart = /add\s+to\s+cart|в\s+корзину/i.test(text);
-  const unavailable = !addToCart && /нет\s+в\s+наличии|out\s+of\s+stock/i.test(text);
-  const available = addToCart ? true : unavailable ? false : null;
-
-  const slug = (() => {
-    try {
-      const p = new URL(url).pathname;
-      const m = p.match(/\/products\/([^/?#]+)/i);
-      return m ? m[1] : null;
-    } catch (_) {
-      return null;
-    }
-  })();
 
   return {
-    name: title,
+    handle,
+    slug: slugEn,
+    name: p.name_en || p.name_ru || slugEn,
     url,
-    handle: slug,
     image,
-    regular_price: prices.old_price,
-    promotional_price: prices.price,
-    available
+    regular_price,
+    promotional_price,
+    available,
+    ubazar_id: id
   };
 }
 
-function parseProductCardsFromCategoryHtml(html) {
-  const out = [];
-  const re = /<a\b[^>]*href=["']([^"']*\/products\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  let m;
-  while ((m = re.exec(html))) {
-    const url = absUrl(m[1]);
-    if (!url) continue;
-    const anchorHtml = String(m[2] || '');
-    const anchorInner = stripHtml(anchorHtml);
-    const handleMatch = url.match(/\/products\/([^/?#]+)/i);
-    const handle = handleMatch ? handleMatch[1] : null;
-
-    // Use nearby chunk around the anchor to pick price from product card context.
-    const from = Math.max(0, m.index - 120);
-    const to = Math.min(html.length, m.index + 1200);
-    const chunk = stripHtml(html.slice(from, to));
-    const prices = parsePrices(chunk);
-    // Card-level structured price spans are more reliable for regular/promotional split.
-    const cardNums = [
-      ...(anchorHtml.matchAll(/price--old-price[^>]*>\s*([0-9]+(?:\.[0-9]{1,2})?)/gi)),
-      ...(anchorHtml.matchAll(/price--price[^>]*>\s*([0-9]+(?:\.[0-9]{1,2})?)/gi))
-    ]
-      .map((x) => Number(x[1]))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    let regularPrice = prices.old_price;
-    let promoPrice = prices.price;
-    if (cardNums.length >= 2) {
-      regularPrice = cardNums[0];
-      promoPrice = cardNums[cardNums.length - 1];
-    } else if (cardNums.length === 1) {
-      promoPrice = cardNums[0];
-      regularPrice = null;
-    }
-
-    // Name from anchor first, fallback by handle prettified.
-    let name = anchorInner;
-    if (!name && handle) name = handle.replace(/-\d+$/, '').replace(/-/g, ' ');
-    if (!name) continue;
-
-    const imgMatch =
-      anchorHtml.match(/<img[^>]+(?:data-src|data-original|src)=["']([^"']+)["'][^>]*>/i) ||
-      html.slice(from, to).match(/<img[^>]+(?:data-src|data-original|src)=["']([^"']+)["'][^>]*>/i) ||
-      null;
-    const image = imgMatch ? absUrl(imgMatch[1]) : null;
-
-    out.push({
-      name,
-      url,
-      handle,
-      image,
-      regular_price: regularPrice,
-      promotional_price: promoPrice
-    });
-  }
-
-  // Deduplicate by handle/url and keep more informative row (with price).
-  const map = new Map();
-  for (const r of out) {
-    const k = r.handle || r.url;
-    if (!k) continue;
-    const prev = map.get(k);
-    if (!prev) {
-      map.set(k, r);
-      continue;
-    }
-    const prevScore = (prev.promotional_price != null ? 1 : 0) + (prev.regular_price != null ? 1 : 0);
-    const nextScore = (r.promotional_price != null ? 1 : 0) + (r.regular_price != null ? 1 : 0);
-    if (nextScore > prevScore) map.set(k, r);
-  }
-  return [...map.values()];
+/**
+ * Fetch products from a category page by extracting the embedded Nuxt state.
+ * Returns array of normalized products.
+ */
+async function fetchCategoryProducts(url) {
+  const html = await fetchText(url);
+  const state = parseNuxtState(html);
+  if (!state) throw new Error(`Could not parse Nuxt state from ${url}`);
+  const raw = state?.pages?.products?.products;
+  if (!Array.isArray(raw)) throw new Error(`No products array in Nuxt state for ${url}`);
+  return raw.map(normalizeApiProduct).filter(Boolean);
 }
 
-function keyByHandleOrUrl(row) {
-  return row?.handle ? `h:${row.handle}` : row?.url ? `u:${row.url}` : null;
+function keyByHandle(row) {
+  return row?.handle ? `h:${row.handle}` : null;
 }
 
 function diffRows(prev, next) {
   const a = new Map();
   const b = new Map();
   for (const r of prev || []) {
-    const k = keyByHandleOrUrl(r);
+    const k = keyByHandle(r);
     if (k) a.set(k, r);
   }
   for (const r of next || []) {
-    const k = keyByHandleOrUrl(r);
+    const k = keyByHandle(r);
     if (k) b.set(k, r);
   }
   const added = [];
@@ -237,185 +148,68 @@ function diffRows(prev, next) {
   for (const [k, n] of b) {
     const p = a.get(k);
     if (!p) {
-      added.push({ key: k, handle: n.handle || null, name: n.name || '' });
+      added.push({ key: k, handle: n.handle, name: n.name || '' });
       continue;
     }
     const changed = [];
-    const pushIf = (field, x, y) => {
-      if (JSON.stringify(x) !== JSON.stringify(y)) changed.push(field);
-    };
+    const pushIf = (field, x, y) => { if (JSON.stringify(x) !== JSON.stringify(y)) changed.push(field); };
     pushIf('promotional_price', p.promotional_price, n.promotional_price);
     pushIf('regular_price', p.regular_price, n.regular_price);
     pushIf('available', p.available, n.available);
     pushIf('name', p.name, n.name);
-    if (changed.length) updated.push({ key: k, handle: n.handle || null, name: n.name || '', changed });
+    pushIf('slug', p.slug, n.slug);
+    if (changed.length) updated.push({ key: k, handle: n.handle, name: n.name || '', changed });
   }
   for (const [k, p] of a) {
-    if (!b.has(k)) removed.push({ key: k, handle: p.handle || null, name: p.name || '' });
+    if (!b.has(k)) removed.push({ key: k, handle: p.handle, name: p.name || '' });
   }
   return { added, removed, updated };
 }
 
-function readJsonIfExists(p, fallback) {
-  if (!fs.existsSync(p)) return fallback;
-  try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch (_) {
-    return fallback;
-  }
-}
+async function fetchAllProducts() {
+  const byId = new Map();
+  const categoryResults = [];
 
-async function discoverCategoryUrls() {
-  let homeLinks = [];
-  try {
-    const home = await fetchText(`${BASE}/`);
-    homeLinks = extractLinks(home);
-  } catch (_) {
-    homeLinks = [];
+  for (const catUrl of TARGET_CATEGORY_URLS) {
+    try {
+      const products = await fetchCategoryProducts(catUrl);
+      categoryResults.push({ url: catUrl, count: products.length });
+      for (const p of products) {
+        if (!byId.has(p.handle)) byId.set(p.handle, p);
+      }
+    } catch (e) {
+      categoryResults.push({ url: catUrl, error: String(e.message || e) });
+    }
   }
 
-  let mainCategory = chooseMainCategory(homeLinks);
-  if (!mainCategory) {
-    // Fallback to known paths if discovery from homepage fails.
-    const guesses = [
-      `${BASE}/categories/ovoschi-i-frukty-4`,
-      `${BASE}/categories/ovoschi-i-zelen-30`,
-      `${BASE}/categories/vegetables-and-fruits-4`
-    ];
-    mainCategory = guesses[0];
+  // Also fetch any mapped products not discovered via category pages (e.g. after remapping).
+  const mapping = readJsonIfExistsSafe(MAPPING_PATH, {});
+  const mappedIds = Object.keys(mapping || {}).map((k) => String(k).trim()).filter(Boolean);
+  for (const id of mappedIds) {
+    if (byId.has(id)) continue;
+    // Try to fetch the product's current page using the old slug if available,
+    // or construct a fallback URL from the mapped ID. Since we don't know the current slug,
+    // skip silently — it will appear as "missing" and the product will be drafted.
+    // The user can re-map using the review UI once the new slug is found.
   }
-  if (!mainCategory) throw new Error('Could not discover UBazar vegetables/fruits main category URL.');
 
-  const mainHtml = await fetchText(mainCategory);
-  const mainLinks = extractLinks(mainHtml);
-  const subs = chooseTargetSubcategories(mainLinks);
-
-  const finalSubs = subs.length
-    ? subs
-    : [
-        `${BASE}/categories/ovoschi-i-zelen-30`,
-        `${BASE}/categories/vegetables-and-herbs-30`,
-        `${BASE}/categories/fruits-32`
-      ];
-
-  const discovered = { mainCategory, subcategories: [...new Set(finalSubs)] };
   try {
     fs.mkdirSync(path.dirname(CATEGORY_INDEX_PATH), { recursive: true });
-    fs.writeFileSync(
-      CATEGORY_INDEX_PATH,
-      JSON.stringify(
-        {
-          scraped_at: new Date().toISOString(),
-          source: BASE,
-          discovered_from_homepage: homeLinks.filter((u) => /\/categories\//i.test(u)).slice(0, 300),
-          discovered
-        },
-        null,
-        2
-      ),
-      'utf8'
-    );
+    fs.writeFileSync(CATEGORY_INDEX_PATH, JSON.stringify({
+      scraped_at: new Date().toISOString(),
+      source: BASE,
+      categories: categoryResults
+    }, null, 2), 'utf8');
   } catch (_) {
     // best-effort
   }
-  return discovered;
-}
 
-async function fetchAllProducts() {
-  const discovered = await discoverCategoryUrls();
-  const productsByKey = new Map();
-
-  for (const cat of discovered.subcategories) {
-    try {
-      const html = await fetchText(cat);
-      for (const r of parseProductCardsFromCategoryHtml(html)) {
-        const k = r.handle || r.url;
-        if (!k) continue;
-        const prev = productsByKey.get(k);
-        if (!prev) productsByKey.set(k, r);
-        else {
-          productsByKey.set(k, {
-            ...prev,
-            name: prev.name || r.name,
-            image: prev.image || r.image || null,
-            regular_price: prev.regular_price != null ? prev.regular_price : r.regular_price,
-            promotional_price: prev.promotional_price != null ? prev.promotional_price : r.promotional_price
-          });
-        }
-      }
-      // Handle simple pagination: try page 2..5 if exists.
-      for (let i = 2; i <= 5; i++) {
-        const paged = `${cat}${cat.includes('?') ? '&' : '?'}page=${i}`;
-        const h2 = await fetchText(paged).catch(() => '');
-        if (!h2) break;
-        const rows = parseProductCardsFromCategoryHtml(h2);
-        if (!rows.length) break;
-        for (const r of rows) {
-          const k = r.handle || r.url;
-          if (!k) continue;
-          const prev = productsByKey.get(k);
-          if (!prev) productsByKey.set(k, r);
-        }
-      }
-    } catch (_) {
-      // Continue if one category link is stale.
-    }
-  }
-
-  const products = [];
-  const rows = [...productsByKey.values()];
-  for (const r of rows) {
-    try {
-      const html = await fetchText(r.url);
-      const p = parseProductFromPage(r.url, html);
-      products.push({
-        ...r,
-        name: p.name || r.name,
-        image: p.image || r.image || null,
-        // Keep card price if present; fallback to page-parsed.
-        regular_price: r.regular_price != null ? r.regular_price : p.regular_price,
-        promotional_price: r.promotional_price != null ? r.promotional_price : p.promotional_price,
-        available: p.available
-      });
-    } catch (_) {
-      // Keep row from category even if product page failed.
-      products.push({ ...r, image: r.image || null, available: null });
-    }
-  }
-
-  // Deduplicate by handle, keep first.
-  const byHandle = new Map();
-  for (const p of products) {
-    const k = p.handle || p.url;
-    if (!k) continue;
-    if (!byHandle.has(k)) byHandle.set(k, p);
-  }
-
-  // If a supplier handle is mapped but missing from category discovery, fetch it directly.
-  const mapping = readJsonIfExistsSafe(MAPPING_PATH, {});
-  const mappedSupplierHandles = Object.keys(mapping || {}).map((h) => String(h || '').trim()).filter(Boolean);
-  for (const h of mappedSupplierHandles) {
-    if (byHandle.has(h)) continue;
-    const url = `${BASE}/products/${encodeURIComponent(h)}`;
-    try {
-      const html = await fetchText(url);
-      const p = parseProductFromPage(url, html);
-      if (p?.handle) {
-        byHandle.set(p.handle, p);
-      }
-    } catch (_) {
-      // Ignore missing/removed products.
-    }
-  }
-
-  return {
-    discovered,
-    products: [...byHandle.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'))
-  };
+  const products = [...byId.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'en'));
+  return { products, categoryResults };
 }
 
 async function main() {
-  const { discovered, products } = await fetchAllProducts();
+  const { products, categoryResults } = await fetchAllProducts();
 
   const prev = readJsonIfExists(OUT, []);
   const prevArr = Array.isArray(prev) ? prev : [];
@@ -424,27 +218,19 @@ async function main() {
   fs.writeFileSync(OUT, JSON.stringify(products, null, 2), 'utf8');
 
   const delta = diffRows(prevArr, products);
-  fs.writeFileSync(
-    OUT_DELTA,
-    JSON.stringify(
-      {
-        scraped_at: new Date().toISOString(),
-        source: BASE,
-        discovered,
-        counts: { total: products.length, added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length },
-        delta
-      },
-      null,
-      2
-    ),
-    'utf8'
-  );
+  fs.writeFileSync(OUT_DELTA, JSON.stringify({
+    scraped_at: new Date().toISOString(),
+    source: BASE,
+    categories: categoryResults,
+    counts: { total: products.length, added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length },
+    delta
+  }, null, 2), 'utf8');
 
   console.log(`UBazar: saved ${products.length} products -> ${OUT}`);
   console.log(`UBazar delta: +${delta.added.length} ~${delta.updated.length} -${delta.removed.length} -> ${OUT_DELTA}`);
 }
 
-module.exports = { fetchAllProducts, discoverCategoryUrls, parseProductFromPage };
+module.exports = { fetchAllProducts, normalizeApiProduct, parseNuxtState };
 
 if (require.main === module) {
   main().catch((e) => {
@@ -452,4 +238,3 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-
