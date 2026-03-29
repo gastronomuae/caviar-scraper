@@ -186,8 +186,9 @@ async function resolveShopifyProductGidByHandleLive(handle) {
 }
 
 function ubazarPriceNumber(p) {
+  if (p == null) return null;
   const n = Number(p);
-  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
 }
 
 async function executeSingleVariantSyncFromUbazar({ sourceHandle, gastronomHandle }) {
