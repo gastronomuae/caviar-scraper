@@ -1434,7 +1434,13 @@ app.post('/api/ubazar/run', async (req, res) => {
         const source = String(sourceHandle || '').trim();
         const gastroHandle = String(gastroHandleRaw || '').trim();
         if (!source || !gastroHandle) continue;
-        const sup = ubazarByHandle.get(source) || null;
+        let sup = ubazarByHandle.get(source) || null;
+        // If the mapping key is an old slug (e.g. "eggplant-500g-1670"), extract the
+        // trailing numeric ID and fall back to looking up by that.
+        if (!sup) {
+          const trailingNum = source.match(/-(\d+)$/)?.[1];
+          if (trailingNum) sup = ubazarByHandle.get(trailingNum) || null;
+        }
         const shouldDraft = !sup || sup.available === false;
         // Skip drafting if this gastronom product was already activated in this run.
         // This handles the case where both a numeric key ("2038") and an old slug key
