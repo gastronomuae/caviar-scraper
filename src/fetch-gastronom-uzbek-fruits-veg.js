@@ -68,8 +68,6 @@ async function fetchCollectionProductsViaAdmin() {
                     node {
                       price
                       availableForSale
-                      weight
-                      weightUnit
                     }
                   }
                 }
@@ -86,16 +84,6 @@ async function fetchCollectionProductsViaAdmin() {
       const n = e?.node;
       if (!n?.handle) continue;
       const v = n?.variants?.edges?.[0]?.node || {};
-      const weightRaw = v?.weight != null ? Number(v.weight) : null;
-      const weightUnit = String(v?.weightUnit || '').toUpperCase();
-      let weightG = null;
-      if (weightRaw != null && weightRaw > 0) {
-        if (weightUnit === 'GRAMS') weightG = Math.round(weightRaw);
-        else if (weightUnit === 'KILOGRAMS') weightG = Math.round(weightRaw * 1000);
-        else if (weightUnit === 'OUNCES') weightG = Math.round(weightRaw * 28.35);
-        else if (weightUnit === 'POUNDS') weightG = Math.round(weightRaw * 453.59);
-        else weightG = Math.round(weightRaw); // fallback: assume grams
-      }
       products.push({
         name: n.title,
         handle: n.handle,
@@ -103,8 +91,7 @@ async function fetchCollectionProductsViaAdmin() {
         image: n?.featuredImage?.url || null,
         product_status: n?.status || null,
         price: v?.price != null ? Number(v.price) : null,
-        available: v?.availableForSale ?? null,
-        weight_g: weightG
+        available: v?.availableForSale ?? null
       });
     }
     const pi = col?.products?.pageInfo || {};
