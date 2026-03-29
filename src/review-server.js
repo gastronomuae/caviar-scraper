@@ -234,7 +234,8 @@ async function executeSingleVariantSyncFromUbazar({ sourceHandle, gastronomHandl
   const promoPrice = ubazarPriceNumber(supplier.promotional_price);
   const regularPrice = ubazarPriceNumber(supplier.regular_price);
   const price = promoPrice ?? regularPrice;
-  if (price != null) updates[0].price = price;
+  // Shopify Decimal fields must be strings.
+  if (price != null && price > 0) updates[0].price = String(price);
   if (promoPrice != null && regularPrice != null && regularPrice !== promoPrice) {
     updates[0].compareAtPrice = String(regularPrice);
   } else {
@@ -247,13 +248,12 @@ async function executeSingleVariantSyncFromUbazar({ sourceHandle, gastronomHandl
     inventoryPolicy = 'DENY';
     quantity = 0;
   } else {
-    // UBazar has no reliable qty; default to unlimited unless explicitly unavailable.
     inventoryPolicy = 'CONTINUE';
     quantity = 0;
   }
   if (inventoryPolicy) updates[0].inventoryPolicy = inventoryPolicy;
 
-  await shopifyGraphql(
+  const mutResult = await shopifyGraphql(
     token,
     `mutation PVBulk($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
       productVariantsBulkUpdate(productId: $productId, variants: $variants) {
@@ -263,6 +263,10 @@ async function executeSingleVariantSyncFromUbazar({ sourceHandle, gastronomHandl
     }`,
     { productId: p.id, variants: updates }
   );
+  const mutErrors = mutResult?.productVariantsBulkUpdate?.userErrors;
+  if (Array.isArray(mutErrors) && mutErrors.length) {
+    throw new Error(`productVariantsBulkUpdate userErrors: ${JSON.stringify(mutErrors)}`);
+  }
 
   if (quantity != null) {
     await setAvailableQuantity({
