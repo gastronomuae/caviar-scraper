@@ -30,7 +30,7 @@ function shopBaseUrl() {
 }
 
 function apiVersion() {
-  return (process.env.API_VERSION || '2024-01').trim();
+  return (process.env.API_VERSION || '2025-10').trim();
 }
 
 async function postJson(url, headers, bodyObj) {

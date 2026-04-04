@@ -10,7 +10,7 @@ function shopBaseUrl() {
 }
 
 function apiVersion() {
-  return (process.env.API_VERSION || '2024-01').trim();
+  return (process.env.API_VERSION || '2025-10').trim();
 }
 
 async function postJson(url, headers, bodyObj) {
@@ -53,7 +53,7 @@ async function getAccessToken() {
 
 /**
  * getProducts(token)
- * POST https://{SHOP}.myshopify.com/admin/api/2024-01/graphql.json
+ * POST https://{SHOP}.myshopify.com/admin/api/{API_VERSION}/graphql.json
  * Headers: X-Shopify-Access-Token
  */
 async function getProducts(token) {

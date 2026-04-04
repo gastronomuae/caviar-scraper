@@ -20,7 +20,7 @@ function shopDomain() {
 }
 
 function apiVersion() {
-  return (process.env.API_VERSION || '2024-01').trim();
+  return (process.env.API_VERSION || '2025-10').trim();
 }
 
 function readJsonIfExists(p, fallback) {
