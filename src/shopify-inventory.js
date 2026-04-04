@@ -18,7 +18,26 @@ function shopDomain() {
 }
 
 function apiVersion() {
-  return (process.env.API_VERSION || '2024-01').trim();
+  return (process.env.API_VERSION || '2025-10').trim();
+}
+
+/** Surface status + body so server logs show Shopify’s real error (OAuth often returns HTTP 400). */
+function formatAxiosError(err, label) {
+  if (err.response) {
+    const status = err.response.status;
+    const raw = err.response.data;
+    const body =
+      typeof raw === 'string'
+        ? raw
+        : raw != null
+          ? JSON.stringify(raw)
+          : '';
+    return new Error(`${label} HTTP ${status}${body ? `: ${body}` : ''}`);
+  }
+  if (err.request) {
+    return new Error(`${label}: no response (${err.message || err.code || 'network'})`);
+  }
+  return err;
 }
 
 function nowIso() {
@@ -58,11 +77,17 @@ async function getAccessToken() {
   const client_id = requireEnv('CLIENT_ID').trim();
   const client_secret = requireEnv('CLIENT_SECRET').trim();
 
-  const { data } = await axios.post(
-    url,
-    { grant_type: 'client_credentials', client_id, client_secret },
-    { headers: { 'Content-Type': 'application/json' }, timeout: 60000 }
-  );
+  let data;
+  try {
+    const res = await axios.post(
+      url,
+      { grant_type: 'client_credentials', client_id, client_secret },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 60000 }
+    );
+    data = res.data;
+  } catch (err) {
+    throw formatAxiosError(err, 'Shopify OAuth token');
+  }
 
   const token = data && data.access_token;
   if (!token) throw new Error(`No access_token in response: ${JSON.stringify(data)}`);
@@ -80,17 +105,23 @@ async function getAccessToken() {
 async function graphql(token, query, variables) {
   const shop = shopDomain();
   const url = `https://${shop}/admin/api/${apiVersion()}/graphql.json`;
-  const { data } = await axios.post(
-    url,
-    { query, variables },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': token
-      },
-      timeout: 60000
-    }
-  );
+  let data;
+  try {
+    const res = await axios.post(
+      url,
+      { query, variables },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': token
+        },
+        timeout: 60000
+      }
+    );
+    data = res.data;
+  } catch (err) {
+    throw formatAxiosError(err, 'Shopify GraphQL');
+  }
   if (Array.isArray(data?.errors) && data.errors.length) {
     throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
   }
