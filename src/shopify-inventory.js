@@ -21,18 +21,38 @@ function apiVersion() {
   return (process.env.API_VERSION || '2025-10').trim();
 }
 
+/** Shopify OAuth sometimes returns a full HTML error page; keep logs readable. */
+function shortenShopifyErrorBody(body) {
+  if (typeof body !== 'string') return body;
+  if (body.length > 4000 && !/<!DOCTYPE|<html[\s>]/i.test(body)) {
+    return `${body.slice(0, 2000)}…`;
+  }
+  const looksHtml = /<!DOCTYPE|<html[\s>]/i.test(body);
+  if (!looksHtml) return body;
+  const title = body.match(/<title[^>]*>([^<]+)<\/title>/i);
+  if (title) return title[1].trim();
+  const oauth = body.match(/Oauth error ([a-z0-9_]+)\s*:\s*([^<\n]+)/i);
+  if (oauth) return `Oauth error ${oauth[1]}: ${oauth[2].trim()}`;
+  return 'Shopify returned an HTML error page (wrong SHOP or app not on store).';
+}
+
 /** Surface status + body so server logs show Shopify’s real error (OAuth often returns HTTP 400). */
 function formatAxiosError(err, label) {
   if (err.response) {
     const status = err.response.status;
     const raw = err.response.data;
-    const body =
-      typeof raw === 'string'
-        ? raw
-        : raw != null
-          ? JSON.stringify(raw)
-          : '';
-    return new Error(`${label} HTTP ${status}${body ? `: ${body}` : ''}`);
+    let bodyStr = '';
+    if (typeof raw === 'string') {
+      bodyStr = shortenShopifyErrorBody(raw);
+    } else if (raw != null) {
+      bodyStr = JSON.stringify(raw);
+    }
+    let msg = `${label} HTTP ${status}${bodyStr ? `: ${bodyStr}` : ''}`;
+    if (/OAuth/i.test(label) && /app_not_installed/i.test(bodyStr + (typeof raw === 'string' ? raw : ''))) {
+      msg +=
+        ' Install this custom app on the target store: Shopify Admin → Settings → Apps and sales channels → Develop apps → your app → Install. SHOP must be that store’s myshopify.com hostname.';
+    }
+    return new Error(msg);
   }
   if (err.request) {
     return new Error(`${label}: no response (${err.message || err.code || 'network'})`);
