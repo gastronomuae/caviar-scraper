@@ -92,7 +92,7 @@
       margin-bottom: 12px;
     }
     .st-confirmed { background: #1f3d2a; color: var(--ok); }
-    .st-handle { background: #2d3a1f; color: #a3e635; }
+
     .st-review { background: #3d3420; color: var(--warn); }
     .st-none { background: #3d2020; color: var(--bad); }
     .match-card {
@@ -446,7 +446,7 @@
     function badgeClass(st) {
       if (st.includes('confirmed')) return 'st-confirmed';
       if (st.includes('no match')) return 'st-none';
-      if (st.includes('auto by handle')) return 'st-handle';
+      if (st.includes('auto by handle')) return 'st-confirmed';
       return 'st-review';
     }
 
@@ -472,7 +472,7 @@
       const list = rowsAll || [];
       const isNoMatch = (r) => String(r?.status || '').includes('no match');
       const isNeedsReview = (r) => String(r?.status || '').includes('needs review');
-      const isConfirmed = (r) => String(r?.status || '').includes('confirmed');
+      const isConfirmed = (r) => { const s = String(r?.status || ''); return s.includes('confirmed') || s.includes('auto by handle'); };
       if (filterMode === 'no_match') rows = list.filter(isNoMatch);
       else if (filterMode === 'needs_review') rows = list.filter(isNeedsReview);
       else if (filterMode === 'confirmed') rows = list.filter(isConfirmed);
