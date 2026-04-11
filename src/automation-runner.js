@@ -273,6 +273,7 @@ async function runDailyAutomation(opts) {
     }
 
     // Sync variants for all confirmed mapped products (present in both supplier + Gastronom export).
+    // Also includes auto-matched products (same handle on supplier and Gastronom, not in mapping file).
     try {
       const mapping = loadMapping();
       const shopify = loadShopifyNormalized();
@@ -280,6 +281,9 @@ async function runDailyAutomation(opts) {
 
       const syncTargets = [];
       const skipped = [];
+      const syncedHandles = new Set();
+
+      // 1. Explicitly mapped products (product_mapping.json)
       for (const [hRaw, gidRaw] of Object.entries(mapping || {})) {
         const h = String(hRaw || '').trim();
         const gid = String(gidRaw || '').trim();
@@ -294,6 +298,20 @@ async function runDailyAutomation(opts) {
           continue;
         }
         syncTargets.push({ source_handle: h, shopify_product_id: gid, supplier });
+        syncedHandles.add(h);
+      }
+
+      // 2. Auto-matched products: same handle exists on both supplier and Gastronom, not already mapped.
+      const gastronomByHandle = new Map(shopify.map((s) => [s.handle, s]).filter(([h]) => h));
+      const supplierAll = readSupplierFile(PATHS.supplier);
+      for (const sp of supplierAll) {
+        const h = (typeof sp.url === 'string' ? sp.url.match(/\/products\/([^/?#]+)/) : null)?.[1] || null;
+        if (!h || syncedHandles.has(h)) continue;
+        const gastronom = gastronomByHandle.get(h);
+        if (!gastronom || !gastronom.shopify_product_id) continue;
+        if (!gastronomGids.has(gastronom.shopify_product_id)) continue;
+        syncTargets.push({ source_handle: h, shopify_product_id: gastronom.shopify_product_id, supplier: sp });
+        syncedHandles.add(h);
       }
 
       const okItems = [];
