@@ -341,6 +341,7 @@ export default function ProductEditor({
             const mfFields = mf.fields
               .map((f) => ({ key: f.field, value: draft?.[f.field] ?? f.en_content ?? "" }))
               .filter((f) => !isEffectivelyEmpty(f.value));
+            console.log(`[push/mf-client] id=${mf.id} type=${mf.type} identification=${mf.identification} fields=${mfFields.map((f) => f.key).join(",") || "(none)"}`);
             if (!mfFields.length) return;
             try {
               const mfRes = await fetch("/api/shopify/push", {
@@ -354,25 +355,35 @@ export default function ProductEditor({
                   fields: mfFields,
                 }),
               });
-              const mfData = await mfRes.json();
+              const mfData = await mfRes.json().catch(() => ({})) as { error?: string; pushed?: number };
               if (mfRes.ok) {
                 totalPushed += mfData.pushed ?? 0;
                 onPushedToShopify?.(mf.id);
+              } else {
+                console.error(`[push/mf-client] failed for ${mf.identification} (${mf.type}): ${mfData.error ?? `HTTP ${mfRes.status}`}`);
               }
-            } catch { /* skip individual metafield push failure */ }
+            } catch (e) {
+              console.error(`[push/mf-client] exception for ${mf.identification}:`, e);
+            }
           })
         );
       }
 
       // Push each FAQ metaobject record that has translated content
       if (faqRecords.length) {
+        const faqPushErrors: string[] = [];
         await Promise.all(
           faqRecords.map(async (faq) => {
             const draft = faqDrafts[faq.id];
+            // Prefer draft value (user-edited this session), fall back to stored en_content
             const faqFields = faq.fields
               .map((f) => ({ key: f.field, value: draft?.[f.field] ?? f.en_content ?? "" }))
               .filter((f) => !isEffectivelyEmpty(f.value));
-            if (!faqFields.length) return;
+            console.log(`[push/faq-client] id=${faq.id} type=${faq.type} identification=${faq.identification} fields=${faqFields.map((f) => f.key).join(",") || "(none)"} hasDraft=${!!draft}`);
+            if (!faqFields.length) {
+              console.warn(`[push/faq-client] skipping ${faq.identification} — no translated content (draft=${JSON.stringify(draft)}, en_content=${faq.fields.map((f) => f.en_content).join("|")})`);
+              return;
+            }
             try {
               const faqRes = await fetch("/api/shopify/push", {
                 method: "POST",
@@ -385,14 +396,25 @@ export default function ProductEditor({
                   fields: faqFields,
                 }),
               });
-              const faqData = await faqRes.json();
+              const faqData = await faqRes.json().catch(() => ({})) as { error?: string; pushed?: number };
               if (faqRes.ok) {
                 totalPushed += faqData.pushed ?? 0;
                 onPushedToShopify?.(faq.id);
+              } else {
+                const errMsg = faqData.error ?? `HTTP ${faqRes.status}`;
+                console.error(`[push/faq-client] failed for ${faq.identification} (${faq.type}): ${errMsg}`);
+                faqPushErrors.push(errMsg);
               }
-            } catch { /* skip individual FAQ push failure */ }
+            } catch (e) {
+              const errMsg = e instanceof Error ? e.message : "unknown error";
+              console.error(`[push/faq-client] exception for ${faq.identification}:`, e);
+              faqPushErrors.push(errMsg);
+            }
           })
         );
+        if (faqPushErrors.length) {
+          console.error(`[push/faq-client] ${faqPushErrors.length} FAQ push(es) failed:`, faqPushErrors);
+        }
       }
 
       setPushState("ok");

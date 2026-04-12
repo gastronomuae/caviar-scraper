@@ -1,4 +1,4 @@
-import { TranslationRecord, TranslationField, ShopifySyncProductRow } from "@/types";
+﻿import { TranslationRecord, TranslationField, ShopifySyncProductRow } from "@/types";
 import { TARGET_LOCALE } from "@/lib/storeConfig";
 import { deriveRecordStatus, getFieldType } from "@/utils/csvParser";
 import { deriveTranslationStatus } from "@/utils/translationStatus";
@@ -60,11 +60,13 @@ export function mergeShopifySyncWithPrevious(
     const newRu = titleF?.ru_content ?? "";
 
     // METAFIELD translations are pushed to gid://shopify/Metafield/XXX, but the
-    // sync batch query only fetches translations for the Product resource — so
+    // sync batch query only fetches translations via the Product resource — so
     // METAFIELD rows always arrive with en_content:"" even after a successful push.
+    // METAOBJECT (e.g. FAQ) rows CAN return EN translations via the batch query, but
+    // if the batch query misses them (e.g. throttle, partial data), they'd also be empty.
     // Preserve any non-empty previous en_content so pushed values survive resync.
     const overlayPrevTranslations = (fields: TranslationField[]): TranslationField[] => {
-      if (rec.type !== "METAFIELD" || !prev) return fields;
+      if ((rec.type !== "METAFIELD" && rec.type !== "METAOBJECT") || !prev) return fields;
       const prevFieldMap = new Map(prev.fields.map((f) => [f.field, f]));
       return fields.map((f) => {
         if (f.en_content.trim()) return f; // incoming has a value — trust it
