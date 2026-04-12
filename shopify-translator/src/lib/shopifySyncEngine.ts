@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   ShopifyResourceStatus,
   ShopifySyncProductRow,
   ShopifySyncResourceType,
@@ -19,6 +19,8 @@ const API_VERSION = SHOPIFY_ADMIN_API_VERSION;
 export const SYNC_BATCH_RESOURCE_COUNT = 8;
 /** Parallel batch GraphQL requests (each batch has SYNC_BATCH_RESOURCE_COUNT resources). */
 export const SYNC_PARALLEL_BATCHES = 4;
+/** Resources per batch for the MEDIA_IMAGE Path B pipeline (smaller — each document has lower field count). */
+const MEDIA_IMAGE_BATCH_SIZE = 10;
 /** Products per products-connection page (Shopify max 250 — fewer list round-trips). */
 export const SYNC_PRODUCTS_PAGE_SIZE = 250;
 
@@ -84,7 +86,7 @@ interface GqlExtensions {
 }
 
 /**
- * Valid values for Shopify Admin API 2025-07 MetafieldOwnerType enum.
+ * Valid values for Shopify Admin API 2025-10 MetafieldOwnerType enum.
  * Baseline = confirmed working on all stores.
  * Candidates = probed at sync start; skipped if the API returns an enum error.
  */
@@ -158,8 +160,6 @@ interface ProductLocaleFields {
       parentType: "PRODUCT" | "COLLECTION";
     }
   >;
-  /** Image alt texts (key = "image.{numericId}.alt"). */
-  imageAlts?: Record<string, string>;
 }
 
 function localeMatches(a: string, b: string): boolean {
@@ -239,15 +239,6 @@ function pickFieldsFromTranslatableContent(
     }
   }
 
-  // Collect image alt texts (key pattern "image.{numericId}.alt")
-  const imageAlts: Record<string, string> = {};
-  const imageAltRe = /^image\..+\.alt$/;
-  for (const c of content) {
-    if (!imageAltRe.test(c.key)) continue;
-    if (!localeMatches(c.locale, locale)) continue;
-    if (c.value) imageAlts[c.key] = c.value;
-  }
-
   return {
     title: pick(FIELD_KEYS.title),
     body_html: pick(FIELD_KEYS.body),
@@ -255,7 +246,6 @@ function pickFieldsFromTranslatableContent(
     meta_description: pickSeoDescription(),
     product_type: pick(FIELD_KEYS.product_type),
     ...(Object.keys(metafields).length > 0 ? { metafields, metafieldTypes } : {}),
-    ...(Object.keys(imageAlts).length > 0 ? { imageAlts } : {}),
   };
 }
 
@@ -275,13 +265,6 @@ function fieldsFromTargetTranslationsOnly(translations: TranslationItem[]): Prod
     }
   }
 
-  // Collect translated image alt texts
-  const imageAlts: Record<string, string> = {};
-  const imageAltRe = /^image\..+\.alt$/;
-  for (const t of translations) {
-    if (imageAltRe.test(t.key) && t.value) imageAlts[t.key] = t.value;
-  }
-
   return {
     title: pick(FIELD_KEYS.title),
     body_html: pick(FIELD_KEYS.body),
@@ -289,7 +272,6 @@ function fieldsFromTargetTranslationsOnly(translations: TranslationItem[]): Prod
     meta_description: pickSeoDescription(),
     product_type: pick(FIELD_KEYS.product_type),
     ...(Object.keys(metafields).length > 0 ? { metafields } : {}),
-    ...(Object.keys(imageAlts).length > 0 ? { imageAlts } : {}),
   };
 }
 
@@ -512,17 +494,7 @@ function toLegacySyncedProductRow(
     };
   }
 
-  // Image alt texts (key = "image.{numericId}.alt")
-  const imageAltEntries: Record<string, { ru_content: string; en_content: string; fieldType: import("@/types").FieldType }> = {};
-  for (const [iak, iav] of Object.entries(source.imageAlts ?? {})) {
-    imageAltEntries[iak] = {
-      ru_content: iav ?? "",
-      en_content: target.imageAlts?.[iak] ?? "",
-      fieldType: "plain",
-    };
-  }
-
-  const fields = { ...standardFieldEntries, ...metaFieldEntries, ...imageAltEntries };
+  const fields = { ...standardFieldEntries, ...metaFieldEntries };
 
   return {
     fields,
@@ -844,6 +816,40 @@ async function shopifyGqlProbeRaw(
 }
 
 /**
+ * Like shopifyGqlWithExtensions but NEVER throws on GraphQL errors — instead returns
+ * them alongside whatever partial data Shopify provided. Used for MEDIA_IMAGE batches
+ * where a single unresolvable GID must not abort the remaining 9 items in the batch.
+ */
+async function shopifyGqlSoft(
+  domain: string,
+  token: string,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<{
+  data: unknown;
+  extensions?: GqlExtensions;
+  errors?: ReadonlyArray<{ message: string; path?: ReadonlyArray<string | number> }>;
+}> {
+  const res = await fetch(`https://${domain}/admin/api/${API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": token,
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Shopify HTTP ${res.status}: ${text.slice(0, 300)}`);
+  let json: { data?: unknown; errors?: ReadonlyArray<{ message: string; path?: ReadonlyArray<string | number> }>; extensions?: GqlExtensions };
+  try {
+    json = JSON.parse(text) as typeof json;
+  } catch {
+    throw new Error(`Shopify response not JSON (${res.status}): ${text.slice(0, 200)}`);
+  }
+  return { data: json.data ?? null, errors: json.errors, extensions: json.extensions };
+}
+
+/**
  * Opt-in resource types that need an enum-support probe before syncing.
  * Each is tested independently so a failure on one never blocks the other.
  * PRODUCT_VARIANT is intentionally absent — it is not a valid
@@ -1015,6 +1021,13 @@ export interface RunShopifySyncParams {
    */
   onTypeComplete?: (resourceType: string, items: SyncBackupRawItem[]) => Promise<void>;
   /**
+   * Called synchronously (no await) right before `onTypeComplete` for each
+   * resource type, with the processed rows that belong to that type.
+   * Use this for progressive UI updates — rows are available here seconds
+   * before the full sync finishes.
+   */
+  onTypeRowsReady?: (resourceType: string, rows: ShopifySyncProductRow[]) => void;
+  /**
    * Optional filter for the Shopify products query string.
    * Example: "updated_at:>=2025-04-01T12:00:00Z" for incremental sync.
    * Only affects the PRODUCT pipeline — all other types run without this filter.
@@ -1055,6 +1068,8 @@ const SHOPIFY_SYNC_DEFAULT_FULL_TYPES = [
   "SELLING_PLAN",
   "SELLING_PLAN_GROUP",
   "FILTER",
+  // MEDIA_IMAGE is opt-in (like METAOBJECT) — 1900+ images ≈ 96s extra per sync.
+  // Include it explicitly via the "Product image alts" checkbox in the UI.
 ] as const;
 
 /** All resource kinds this engine may sync when explicitly requested (includes opt-in kinds). */
@@ -1181,6 +1196,12 @@ function shouldFetchMetafields(types: ShopifySyncResourceType[] | undefined): bo
 
 /** Reduced page size when metafields are fetched per-node (heavier queries). */
 const SYNC_PAGE_SIZE_WITH_METAFIELDS = 50;
+/**
+ * Larger batch size for the translatable-resource query when metafields are
+ * included.  Fewer GQL documents per page: ⌈50÷25⌉=2 batches vs ⌈50÷8⌉=7,
+ * cutting per-page round-trips from 8 to 3 (≈ 2.7× faster translation fetch).
+ */
+const SYNC_BATCH_WITH_METAFIELDS = 25;
 
 /**
  * Metafield types (lowercase, as returned by `metafields { nodes { type } }`)
@@ -1450,8 +1471,82 @@ const COLLECTIONS_PAGE_QUERY = `
   }
 `;
 
+// ── MEDIA_IMAGE parent-product mapping ────────────────────────────────────
+
+const PRODUCTS_WITH_MEDIA_QUERY = `
+  query ProductsWithMedia($first: Int!, $after: String) {
+    products(first: $first, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id
+          handle
+          title
+          media(first: 30) {
+            nodes {
+              ... on MediaImage { id }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Builds a map of numeric MediaImage ID → parent product info by paging through
+ * all products. Used to link MEDIA_IMAGE translatable resources back to their
+ * parent product for display in the editor.
+ */
+async function fetchMediaImageProductMap(
+  domain: string,
+  token: string,
+): Promise<Map<string, { productHandle: string; productTitle: string }>> {
+  const map = new Map<string, { productHandle: string; productTitle: string }>();
+  let after: string | null = null;
+  let hasNext = true;
+  let pages = 0;
+  while (hasNext) {
+    const { data, extensions } = await shopifyGqlWithExtensions(domain, token, PRODUCTS_WITH_MEDIA_QUERY, {
+      first: 250,
+      after,
+    });
+    await maybeThrottleAfterGql(extensions);
+    const conn = (data as {
+      products?: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        edges: Array<{
+          node: {
+            id: string;
+            handle: string;
+            title: string;
+            media?: { nodes: Array<{ id?: string }> };
+          };
+        }>;
+      };
+    })?.products;
+    if (!conn) break;
+    for (const edge of conn.edges) {
+      const { handle, title } = edge.node;
+      for (const mediaNode of edge.node.media?.nodes ?? []) {
+        // Store the full GID as the map key — avoids a lossy numeric round-trip
+        // when constructing batch query variables later.
+        if (!mediaNode.id) continue;
+        map.set(mediaNode.id, { productHandle: handle, productTitle: title });
+      }
+    }
+    hasNext = conn.pageInfo.hasNextPage;
+    after = conn.pageInfo.endCursor;
+    pages++;
+  }
+  console.info(`[sync/MEDIA_IMAGE] mediaImageProductMap built: ${map.size} images across ${pages} product page(s)`);
+  return map;
+}
+
 export async function runShopifySync(params: RunShopifySyncParams): Promise<ShopifySyncProductRow[]> {
-  const { domain, token, sourceLocale, targetLocale, onProgress, onTypeComplete } = params;
+  const { domain, token, sourceLocale, targetLocale, onProgress, onTypeComplete, onTypeRowsReady } = params;
+  /** Index into `products` marking the start of the current type's rows. */
+  let lastRowIdx = 0;
   let syncTypes: ShopifySyncResourceType[] =
     params.types === undefined || params.types.length === 0
       ? [...SHOPIFY_SYNC_DEFAULT_FULL_TYPES]
@@ -1471,6 +1566,12 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
    */
   async function fireTypeComplete(resourceType: string): Promise<void> {
     const items = typeRawBuffer.splice(0);
+    // Emit the rows that were added since the previous fireTypeComplete call.
+    // Because fireTypeComplete is never called concurrently (each pipeline awaits
+    // its turn), lastRowIdx always points to the first row of the current type.
+    const typeRows = products.slice(lastRowIdx);
+    lastRowIdx = products.length;
+    onTypeRowsReady?.(resourceType, typeRows);
     if (!onTypeComplete) return;
     try {
       await onTypeComplete(resourceType, items);
@@ -1515,45 +1616,68 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
     }
   }
 
-  if (includeMetafields) {
-    // Probe any candidate owner types that haven't been checked yet this process.
-    const unprobed = CANDIDATE_METAFIELD_OWNER_TYPES.filter((ot) => !_ownerTypeProbeCache.has(ot));
-    if (unprobed.length > 0) {
-      await Promise.all(
-        unprobed.map(async (ot) => {
+  // Fire definition loading as a non-blocking background promise so it runs concurrently
+  // with the product/collection/metaobject pipelines. definitionNameMap is a shared Map;
+  // JS's single-threaded event loop makes concurrent reads/writes safe — early product
+  // batches may use fallback key names if a definition hasn't landed yet, but that is
+  // purely cosmetic and affects only the first few batches on a cold start.
+  // We await this promise before firing onTypeComplete for PRODUCT and METAFIELD so that
+  // the backup payload always has fully-labelled field names.
+  const defLoadDone: Promise<void> = includeMetafields
+    ? (async () => {
+        const defLoadStart = Date.now();
+        // Probe any candidate owner types that haven't been checked yet this process.
+        const unprobed = CANDIDATE_METAFIELD_OWNER_TYPES.filter((ot) => !_ownerTypeProbeCache.has(ot));
+        if (unprobed.length > 0) {
+          await Promise.all(
+            unprobed.map(async (ot) => {
+              try {
+                const { data } = await shopifyGqlWithExtensions(domain, token, METAFIELD_DEFINITIONS_QUERY, {
+                  ownerType: ot,
+                  first: 1,
+                  after: null,
+                });
+                // Mark as supported only if the type actually has ≥1 definition.
+                // An empty nodes[] response means the API is valid but the store has
+                // no definitions for this owner type — no need to load on this invocation.
+                const probedNodes = (data as { metafieldDefinitions?: { nodes?: unknown[] } })?.metafieldDefinitions?.nodes;
+                const hasDefinitions = Array.isArray(probedNodes) && probedNodes.length > 0;
+                _ownerTypeProbeCache.set(ot, hasDefinitions);
+                console.info(
+                  `[sync/metafield-owner-probe] ${ot} → ${
+                    hasDefinitions ? "has definitions — loading" : "0 definitions — excluding from load"
+                  }`,
+                );
+              } catch (err) {
+                _ownerTypeProbeCache.set(ot, false);
+                console.info(`[sync/metafield-owner-probe] ${ot} → enum_error — skipping (${(err instanceof Error ? err.message : String(err)).slice(0, 120)})`);
+              }
+            }),
+          );
+        }
+
+        // Build final list: baseline always included; candidates only if probe passed.
+        const validCandidates = CANDIDATE_METAFIELD_OWNER_TYPES.filter((ot) => _ownerTypeProbeCache.get(ot) === true);
+        const ownerTypes: MetafieldOwnerType[] = [...BASELINE_METAFIELD_OWNER_TYPES, ...validCandidates];
+
+        console.info(
+          `[sync/metafield-definitions] Loading definitions for ${ownerTypes.length} owner type(s)` +
+          (validCandidates.length > 0 ? ` (${validCandidates.length} candidates: ${validCandidates.join(", ")})` : ""),
+        );
+
+        await Promise.all(ownerTypes.map(async (ot) => {
           try {
-            const { data } = await shopifyGqlWithExtensions(domain, token, METAFIELD_DEFINITIONS_QUERY, {
-              ownerType: ot,
-              first: 1,
-              after: null,
-            });
-            const supported = !!(data as { metafieldDefinitions?: unknown })?.metafieldDefinitions;
-            _ownerTypeProbeCache.set(ot, supported);
-            console.info(`[sync/metafield-owner-probe] ${ot} → ${supported ? "supported" : "no data — will still load"}`);
+            await loadMetafieldDefinitionNames(ot);
           } catch (err) {
-            _ownerTypeProbeCache.set(ot, false);
-            console.info(`[sync/metafield-owner-probe] ${ot} → enum_error — skipping (${(err instanceof Error ? err.message : String(err)).slice(0, 120)})`);
+            console.warn(`[sync/metafield-definitions] Skipping ${ot} — ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`);
           }
-        }),
-      );
-    }
+        }));
 
-    // Build final list: baseline always included; candidates only if probe passed.
-    const validCandidates = CANDIDATE_METAFIELD_OWNER_TYPES.filter((ot) => _ownerTypeProbeCache.get(ot) === true);
-    const ownerTypes: MetafieldOwnerType[] = [...BASELINE_METAFIELD_OWNER_TYPES, ...validCandidates];
-
-    if (validCandidates.length > 0) {
-      console.info(`[sync/metafield-definitions] Loading definitions for ${ownerTypes.length} owner types (${validCandidates.length} new: ${validCandidates.join(", ")})`);
-    }
-
-    await Promise.all(ownerTypes.map(async (ot) => {
-      try {
-        await loadMetafieldDefinitionNames(ot);
-      } catch (err) {
-        console.warn(`[sync/metafield-definitions] Skipping ${ot} — ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`);
-      }
-    }));
-  }
+        console.info(
+          `[sync/metafield-definitions] Done — ${metafieldDefinitionEntriesLoaded} entries loaded in ${Date.now() - defLoadStart}ms`,
+        );
+      })()
+    : Promise.resolve();
   const productPageSize = includeMetafields ? SYNC_PAGE_SIZE_WITH_METAFIELDS : SYNC_PRODUCTS_PAGE_SIZE;
   const productFilter = params.productQueryFilter
     ? `updated_at:>=${params.productQueryFilter}`
@@ -1612,9 +1736,12 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
 
     async function processProductNodes(nodes: ProductNodeMaybeWithMeta[]): Promise<void> {
       if (nodes.length === 0) return;
+      // Use the larger batch size when metafields are enabled — reduces per-page
+      // GQL round-trips from ⌈50÷8⌉=7 batches down to ⌈50÷25⌉=2 batches.
+      const batchSize = includeMetafields ? SYNC_BATCH_WITH_METAFIELDS : SYNC_BATCH_RESOURCE_COUNT;
       const batchChunks: ProductNodeMaybeWithMeta[][] = [];
-      for (let i = 0; i < nodes.length; i += SYNC_BATCH_RESOURCE_COUNT)
-        batchChunks.push(nodes.slice(i, i + SYNC_BATCH_RESOURCE_COUNT));
+      for (let i = 0; i < nodes.length; i += batchSize)
+        batchChunks.push(nodes.slice(i, i + batchSize));
 
       for (let w = 0; w < batchChunks.length; w += SYNC_PARALLEL_BATCHES) {
         const wave = batchChunks.slice(w, w + SYNC_PARALLEL_BATCHES);
@@ -1645,7 +1772,7 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
               const sourceFields = node.metafields?.nodes?.length
                 ? mergeDirectMetafields(
                     baseSource,
-                    node.metafields.nodes,
+                    node.metafields!.nodes,
                     "PRODUCT",
                     node.title ?? node.handle ?? "",
                     definitionNameMap
@@ -1653,19 +1780,37 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
                 : baseSource;
               const targetFields = fieldsFromTargetTranslationsOnly(translations);
 
+              // When standalone METAFIELD rows are emitted for this product, the
+              // product row must NOT contain meta.* fields — they come from two places:
+              //   (a) Shopify's translatableContent response (already in baseSource.metafields)
+              //   (b) mergeDirectMetafields (in sourceFields.metafields)
+              // Both would land in the product row's "Metafields" group via
+              // toLegacySyncedProductRow, duplicating every field already shown in
+              // MetafieldSection.  Strip all metafield bags from the source so the
+              // product row carries only the five scalar fields.
+              const willEmitMfRows = includeMetafields && !!node.metafields?.nodes?.length;
+              const rowSource: ProductLocaleFields = willEmitMfRows
+                ? {
+                    title:            baseSource.title,
+                    body_html:        baseSource.body_html,
+                    meta_title:       baseSource.meta_title,
+                    meta_description: baseSource.meta_description,
+                    product_type:     baseSource.product_type,
+                  }
+                : sourceFields;
               const productRow = toLegacySyncedProductRow(
                 node.handle, shopify_id,
-                sourceFields,
+                rowSource,
                 targetFields,
                 used_fallback, srcLocale,
                 parseProductResourceStatus(node.status ?? undefined),
                 node.publishedAt ?? null
               );
 
-              if (includeMetafields && node.metafields?.nodes?.length) {
+              if (willEmitMfRows) {
                 // Extract metaobject reference GIDs from list.metaobject_reference fields.
                 const moRefs: string[] = [];
-                for (const mf of node.metafields.nodes) {
+                for (const mf of node.metafields!.nodes) {
                   if (mf.type !== "list.metaobject_reference" && mf.type !== "metaobject_reference") continue;
                   if (!mf.value) continue;
                   try {
@@ -1681,7 +1826,7 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
                 if (moRefs.length > 0) productRow.metaobjectRefs = moRefs;
 
                 const mfRows = createMetafieldRowsFromDirect(
-                  node.metafields.nodes,
+                  node.metafields!.nodes,
                   "PRODUCT",
                   node.title ?? node.handle ?? "",
                   node.handle,
@@ -1721,6 +1866,9 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
       await maybeThrottleAfterGql(nextExt);
       pageData = nextData;
     }
+    // Ensure definitions are fully loaded before the backup payload is built
+    // so every metafield row has its human-readable display name.
+    await defLoadDone;
     await fireTypeComplete("PRODUCT");
   } // end products pipeline
 
@@ -1864,7 +2012,7 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
                   const sourceFields = node.metafields?.nodes?.length
                     ? mergeDirectMetafields(
                         baseSource,
-                        node.metafields.nodes,
+                        node.metafields!.nodes,
                         "COLLECTION",
                         node.title ?? node.handle ?? "",
                         definitionNameMap
@@ -1888,7 +2036,7 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
 
                   // Extract metaobject reference GIDs (same as product pipeline).
                   const moRefs: string[] = [];
-                  for (const mf of node.metafields.nodes) {
+                  for (const mf of node.metafields!.nodes) {
                     if (mf.type !== "list.metaobject_reference" && mf.type !== "metaobject_reference") continue;
                     if (!mf.value) continue;
                     try {
@@ -1904,7 +2052,7 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
                   if (moRefs.length > 0) baseRow.metaobjectRefs = moRefs;
 
                   const mfRows = createMetafieldRowsFromDirect(
-                    node.metafields.nodes,
+                    node.metafields!.nodes,
                     "COLLECTION",
                     node.title ?? node.handle ?? "",
                     node.handle,
@@ -1931,6 +2079,7 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
         console.warn(`[sync] Skipping COLLECTION (metafields) — ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`);
         typeRawBuffer.splice(0); // discard partial data on failure
       }
+      await defLoadDone;
       await fireTypeComplete("COLLECTION");
     }
   }
@@ -1967,98 +2116,108 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
       console.error("[sync/metaobjects] metaobjectDefinitions failed:", err instanceof Error ? err.message : err);
     }
 
-    // Step 2 — for each translatable type: fetch instances with field values + EN translations.
+    // Step 2 — fetch all translatable types concurrently.
+    // Types are independent; running them in parallel cuts wall-clock time from
+    // sum(type_durations) to max(type_durations) — critical for stores with many types.
     type MoField = { key: string; value: string | null; type: string };
     type MoNode = { id: string; handle: string; fields: MoField[] };
     type MoConn = { metaobjects?: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: MoNode[] } };
 
-    for (const moType of translatableTypes) {
-      try {
-        let moCursor: string | null = null;
-        let moHasNext = true;
+    const moTypeResults = await Promise.all(
+      translatableTypes.map(async (moType): Promise<ShopifySyncProductRow[]> => {
+        // Collect rows locally — merged into `products` after all types finish.
+        const typeRows: ShopifySyncProductRow[] = [];
+        try {
+          let moCursor: string | null = null;
+          let moHasNext = true;
 
-        while (moHasNext) {
-          const { data: moData, extensions: moExt } = await shopifyGqlWithExtensions(
-            domain, token, METAOBJECTS_WITH_FIELDS_QUERY,
-            { type: moType, first: SYNC_PRODUCTS_PAGE_SIZE, after: moCursor }
-          );
-          await maybeThrottleAfterGql(moExt);
-          const moConn = (moData as MoConn)?.metaobjects;
-          if (!moConn) break;
-          moHasNext = moConn.pageInfo.hasNextPage;
-          moCursor = moConn.pageInfo.endCursor;
-          const instances = moConn.nodes;
+          while (moHasNext) {
+            const { data: moData, extensions: moExt } = await shopifyGqlWithExtensions(
+              domain, token, METAOBJECTS_WITH_FIELDS_QUERY,
+              { type: moType, first: SYNC_PRODUCTS_PAGE_SIZE, after: moCursor }
+            );
+            await maybeThrottleAfterGql(moExt);
+            const moConn = (moData as MoConn)?.metaobjects;
+            if (!moConn) break;
+            moHasNext = moConn.pageInfo.hasNextPage;
+            moCursor = moConn.pageInfo.endCursor;
+            const instances = moConn.nodes;
 
-          if (instances.length > 0) {
-            const chunks: MoNode[][] = [];
-            for (let i = 0; i < instances.length; i += SYNC_BATCH_RESOURCE_COUNT)
-              chunks.push(instances.slice(i, i + SYNC_BATCH_RESOURCE_COUNT));
+            if (instances.length > 0) {
+              const chunks: MoNode[][] = [];
+              for (let i = 0; i < instances.length; i += SYNC_BATCH_RESOURCE_COUNT)
+                chunks.push(instances.slice(i, i + SYNC_BATCH_RESOURCE_COUNT));
 
-            for (let w = 0; w < chunks.length; w += SYNC_PARALLEL_BATCHES) {
-              const wave = chunks.slice(w, w + SYNC_PARALLEL_BATCHES);
-              const waveResults = await Promise.all(
-                wave.map(async (chunk) => {
-                  if (!chunk.length) return [] as ShopifySyncProductRow[];
+              for (let w = 0; w < chunks.length; w += SYNC_PARALLEL_BATCHES) {
+                const wave = chunks.slice(w, w + SYNC_PARALLEL_BATCHES);
+                const waveResults = await Promise.all(
+                  wave.map(async (chunk) => {
+                    if (!chunk.length) return [] as ShopifySyncProductRow[];
 
-                  // Batch-fetch EN translations via translatableResource (reuses existing query).
-                  const q = buildTranslatableBatchQuery(chunk.length);
-                  const vars: Record<string, unknown> = { targetLocale };
-                  chunk.forEach((n, i) => { vars[`id${i}`] = n.id; });
-                  const { data: trData, extensions: trExt } = await shopifyGqlWithExtensions(domain, token, q, vars);
-                  await maybeThrottleAfterGql(trExt);
-                  const trMap = trData as Record<string, TrNode>;
+                    // Batch-fetch EN translations via translatableResource (reuses existing query).
+                    const q = buildTranslatableBatchQuery(chunk.length);
+                    const vars: Record<string, unknown> = { targetLocale };
+                    chunk.forEach((n, i) => { vars[`id${i}`] = n.id; });
+                    const { data: trData, extensions: trExt } = await shopifyGqlWithExtensions(domain, token, q, vars);
+                    await maybeThrottleAfterGql(trExt);
+                    const trMap = trData as Record<string, TrNode>;
 
-                  return chunk
-                    .map((node, i) => {
-                      // Source: direct field values — no locale matching required.
-                      const sourceFields: Record<string, { ru_content: string; en_content: string; fieldType: import("@/types").FieldType }> = {};
-                      for (const f of node.fields) {
-                        if (!TRANSLATABLE_FIELD_TYPES.has(f.type)) continue;
-                        if (!f.value) continue;
-                        sourceFields[f.key] = {
-                          ru_content: f.value,
-                          en_content: "",
-                          fieldType: shopifyTypeToFieldType(f.type.toUpperCase()),
-                        };
-                      }
-                      if (Object.keys(sourceFields).length === 0) return null;
-
-                      // Target: merge existing EN translations from translatableResource.
-                      const trNode = trMap[`r${i}`];
-                      const translations = trNode?.translations ?? [];
-                      typeRawBuffer.push({
-                        resourceId: node.id,
-                        content: trNode?.translatableContent ?? [],
-                        translations,
-                      });
-                      for (const t of translations) {
-                        if (t.key in sourceFields && t.value) {
-                          sourceFields[t.key].en_content = t.value;
+                    return chunk
+                      .map((node, i) => {
+                        // Source: direct field values — no locale matching required.
+                        const sourceFields: Record<string, { ru_content: string; en_content: string; fieldType: import("@/types").FieldType }> = {};
+                        for (const f of node.fields) {
+                          if (!TRANSLATABLE_FIELD_TYPES.has(f.type)) continue;
+                          if (!f.value) continue;
+                          sourceFields[f.key] = {
+                            ru_content: f.value,
+                            en_content: "",
+                            fieldType: shopifyTypeToFieldType(f.type.toUpperCase()),
+                          };
                         }
-                      }
+                        if (Object.keys(sourceFields).length === 0) return null;
 
-                      return toMetaobjectSyncRow(
-                        node.handle, gidToNumericId(node.id), moType,
-                        sourceFields, false, sourceLocale
-                      );
-                    })
-                    .filter((r): r is ShopifySyncProductRow => r !== null);
-                })
-              );
-              for (const part of waveResults) {
-                products.push(...part);
-                processed += part.length;
-                onProgress?.({ processed, total: totalCount, pct: null });
+                        // Target: merge existing EN translations from translatableResource.
+                        const trNode = trMap[`r${i}`];
+                        const translations = trNode?.translations ?? [];
+                        // typeRawBuffer concurrent push is safe — JS is single-threaded.
+                        typeRawBuffer.push({
+                          resourceId: node.id,
+                          content: trNode?.translatableContent ?? [],
+                          translations,
+                        });
+                        for (const t of translations) {
+                          if (t.key in sourceFields && t.value) {
+                            sourceFields[t.key].en_content = t.value;
+                          }
+                        }
+
+                        return toMetaobjectSyncRow(
+                          node.handle, gidToNumericId(node.id), moType,
+                          sourceFields, false, sourceLocale
+                        );
+                      })
+                      .filter((r): r is ShopifySyncProductRow => r !== null);
+                  })
+                );
+                for (const part of waveResults) {
+                  typeRows.push(...part);
+                  processed += part.length;
+                  onProgress?.({ processed, total: totalCount, pct: null });
+                }
               }
             }
-          }
 
-          if (!moHasNext) break;
+            if (!moHasNext) break;
+          }
+        } catch (err) {
+          console.error(`[sync/metaobjects] type "${moType}" failed:`, err instanceof Error ? err.message : err);
         }
-      } catch (err) {
-        console.error(`[sync/metaobjects] type "${moType}" failed:`, err instanceof Error ? err.message : err);
-      }
-    }
+        return typeRows;
+      })
+    );
+    // Merge all type rows into the shared accumulator.
+    for (const typeRows of moTypeResults) products.push(...typeRows);
     await fireTypeComplete("METAOBJECT");
   }
 
@@ -2071,6 +2230,8 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
     "BLOG",    "ONLINE_STORE_BLOG",
     "ARTICLE", "ONLINE_STORE_ARTICLE",
     "METAOBJECT",
+    // MEDIA_IMAGE uses Path B (batched translatableResource calls) — not the generic Path A pagination
+    "MEDIA_IMAGE",
   ]);
 
   const rawRequestedTypes: ShopifySyncResourceType[] = syncTypes;
@@ -2102,6 +2263,105 @@ export async function runShopifySync(params: RunShopifySyncParams): Promise<Shop
   let policyTitleMap: Map<string, string> | null = null;
   if (requestedTypes.includes("SHOP_POLICY")) {
     policyTitleMap = await fetchPolicyTitleMap(domain, token);
+  }
+
+  // Pre-fetch media image → parent product map so MEDIA_IMAGE records can be labelled
+  // with the product they belong to and linked back for editor display.
+  let mediaImageProductMap: Map<string, { productHandle: string; productTitle: string }> | null = null;
+  if (requestedTypes.includes("MEDIA_IMAGE")) {
+    mediaImageProductMap = await fetchMediaImageProductMap(domain, token);
+  }
+
+  // ── MEDIA_IMAGE pipeline (Path B) ─────────────────────────────────────────
+  // MEDIA_IMAGE is only active from API 2025-10 (Shopify changelog June 29 2025).
+  // translatableResources(resourceType: MEDIA_IMAGE) exists in the 2025-07 schema
+  // but returns invalid-id on all calls — requires 2025-10+.
+  // We use the GIDs from the product-media map and call the singular
+  // translatableResource(resourceId: $id) in batches of MEDIA_IMAGE_BATCH_SIZE.
+  if (requestedTypes.includes("MEDIA_IMAGE") && mediaImageProductMap && mediaImageProductMap.size > 0) {
+    let keyNameLogged = false;
+    // Map is now keyed by full GID (gid://shopify/MediaImage/XXX) to avoid round-trip errors.
+    const allMediaEntries = [...mediaImageProductMap.entries()]; // [fullGid, {productHandle, productTitle}]
+    console.info(`[sync/MEDIA_IMAGE] starting Path B — ${allMediaEntries.length} GIDs to fetch`);
+    // Diagnostic: log the first 3 GIDs before any API call so format can be verified.
+    console.log(`[sync/MEDIA_IMAGE] first 3 GIDs: ${allMediaEntries.slice(0, 3).map(([gid]) => gid).join(", ")}`);
+
+    for (let waveStart = 0; waveStart < allMediaEntries.length; waveStart += MEDIA_IMAGE_BATCH_SIZE * SYNC_PARALLEL_BATCHES) {
+      const waveEntries = allMediaEntries.slice(waveStart, waveStart + MEDIA_IMAGE_BATCH_SIZE * SYNC_PARALLEL_BATCHES);
+      const chunks: typeof waveEntries[] = [];
+      for (let i = 0; i < waveEntries.length; i += MEDIA_IMAGE_BATCH_SIZE)
+        chunks.push(waveEntries.slice(i, i + MEDIA_IMAGE_BATCH_SIZE));
+
+      let firstWaveBatch = waveStart === 0;
+      const waveRows = await Promise.all(
+        chunks.map(async (chunk) => {
+          const n = chunk.length;
+          const query = buildTranslatableBatchQuery(n);
+          const variables: Record<string, unknown> = { targetLocale };
+          // Pass the full GID directly — no reconstruction needed.
+          chunk.forEach(([gid], i) => { variables[`id${i}`] = gid; });
+
+          // Diagnostic: dump the full variables JSON for the very first batch.
+          if (firstWaveBatch) {
+            firstWaveBatch = false;
+            console.log(`[sync/MEDIA_IMAGE] first batch variables: ${JSON.stringify(variables)}`);
+          }
+
+          // Use the soft variant — a single unresolvable GID must not abort the other 9.
+          const { data: trData, extensions: trExt, errors: trErrors } = await shopifyGqlSoft(domain, token, query, variables);
+          await maybeThrottleAfterGql(trExt);
+
+          if (trErrors?.length) {
+            console.warn(`[sync/MEDIA_IMAGE] batch had ${trErrors.length} error(s): ${trErrors.map((e) => e.message).join("; ").slice(0, 300)}`);
+          }
+
+          const d = (trData ?? {}) as Record<string, TrNode>;
+          const rows: ShopifySyncProductRow[] = [];
+          for (let i = 0; i < chunk.length; i++) {
+            const [gid, parent] = chunk[i];
+            const numericId = gidToNumericId(gid);
+            const tr = d[`r${i}`];
+            const content = tr?.translatableContent ?? [];
+            const translations = tr?.translations ?? [];
+
+            // Log exact key names from the first non-empty response (diagnostic).
+            if (!keyNameLogged && content.length > 0) {
+              console.log(`[sync/MEDIA_IMAGE] key names from Shopify: [${content.map((c) => `"${c.key}"@${c.locale}`).join(", ")}]`);
+              keyNameLogged = true;
+            }
+
+            typeRawBuffer.push({ resourceId: gid, content, translations });
+
+            const { resolved: srcLocale, usedFallback } = resolveSourceLocale(content, sourceLocale);
+            const fields = buildDynamicFieldBag(content, translations, srcLocale);
+            if (Object.keys(fields).length === 0) continue;
+
+            rows.push({
+              fields,
+              handle: `${parent.productHandle}__img-${numericId}`,
+              shopify_id: numericId,
+              ru_title: `${parent.productTitle} — Image alt`,
+              ru_body: "",
+              en_title: "",
+              en_body: "",
+              used_fallback: usedFallback,
+              resolved_source_locale: srcLocale,
+              fallback_reason: usedFallback ? "missing_source_locale" : null,
+              resourceKind: "MEDIA_IMAGE",
+              parentProductHandle: parent.productHandle,
+            });
+            processed++;
+            report();
+          }
+          return rows;
+        }),
+      );
+
+      for (const rows of waveRows) products.push(...rows);
+    }
+
+    await fireTypeComplete("MEDIA_IMAGE");
+    console.info(`[sync/MEDIA_IMAGE] complete — ${products.filter((p) => p.resourceKind === "MEDIA_IMAGE").length} image alt rows added`);
   }
 
   for (const resourceType of genericTypes) {

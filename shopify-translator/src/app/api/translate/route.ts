@@ -1,1 +1,590 @@
-﻿import { NextRequest, NextResponse } from "next/server";import OpenAI from "openai";import { TranslateRequestField, TranslateResponseField, FieldType } from "@/types";import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT } from "@/lib/translationDefaults";import {  makeUsageCollector,  sumUsage,  logOpenAIUsage,  type UsageCollector,} from "@/lib/server/openaiUsageLogger";import { logAppEvent } from "@/lib/server/appEventLogger";function getOpenAIClient() {  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });}const SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT;const FEW_SHOT_USER = `╨Æ╨░╤Ç╨╡╨╜╤î╨╡ ╤ç╨╡╤Ç╨╜╨╕╤ç╨╜╨╛╨╡ ╨¢╤â╨║╨░╤ê╨╕╨╜╤ü╨║╨╕╨╡ - ╨║╤â╨┐╨╕╤é╤î ╨▓ ╨ö╤â╨▒╨░╨╡`;const FEW_SHOT_ASSISTANT = `Lukashinskie Blueberry Jam ΓÇô Buy in Dubai`;function withGlossary(systemPrompt: string, glossaryRaw: string): string {  const pairs = glossaryRaw    .split(/\r?\n/)    .map((line) => line.trim())    .filter((line) => line.length > 0 && line.includes("="))    .map((line) => {      const [src, ...rest] = line.split("=");      return {        src: src.trim(),        dst: rest.join("=").trim(),      };    })    .filter((p) => p.src.length > 0 && p.dst.length > 0);  if (pairs.length === 0) return systemPrompt;  const glossaryBlock =    "Glossary rules (apply to all fields):\n" +    pairs.map((p) => `- ${p.src} => ${p.dst}`).join("\n") +    "\nUse the glossary terms exactly when the source term appears.";  return `${systemPrompt}\n\n${glossaryBlock}`;}// ΓöÇΓöÇ Per-field type instructions (used for HTML and as hints in batch) ΓöÇΓöÇΓöÇΓöÇΓöÇfunction fieldTypeInstruction(fieldType: FieldType, src = "Russian", tgt = "English"): string {  switch (fieldType) {    case "html":      return (        `Translate the following product description from ${src} to ${tgt}.\n` +        `CRITICAL FORMATTING RULES ΓÇö violating any of these will break the storefront:\n` +        `- Output ONLY the translated HTML ΓÇö no markdown, no code fences (\`\`\`), no explanation\n` +        `- Do NOT wrap output in <html>, <head>, or <body> tags\n` +        `- Reproduce EVERY HTML tag verbatim in the same position (<div>, <h2>, <ul>, <li>, <p>, <strong>, etc.)\n` +        `- Bracket tags [short_description] [/short_description] [product_description] [/product_description] MUST be preserved exactly as-is on their own lines ΓÇö NEVER remove, rename, or wrap them in <p> or any other tag\n` +        `- Preserve ALL blank lines between sections exactly as in the source\n` +        `- Do NOT collapse multiple lines into one ΓÇö every line break in the input must appear in the output\n` +        `- Do NOT add any new tags that are not in the source\n\n`      );    case "seo_title":      return (        `Translate this SEO meta title from ${src} to ${tgt}. ` +        `Plain text only; max 60 characters; translate exactly what is written ΓÇö do NOT add phrases not present in the source. `      );    case "seo_desc":      return (        `Translate this SEO meta description from ${src} to ${tgt}. ` +        `Plain text only; max 160 characters; translate exactly what is written ΓÇö do NOT add phrases not present in the source. `      );    default:      return `Translate from ${src} to ${tgt}. Plain text, no HTML. Translate only ΓÇö do not add, remove, or rephrase content. `;  }}function getMaxTokens(fieldType: FieldType): number {  switch (fieldType) {    case "html":      return 4000;    case "seo_title": return 250;  // extra headroom for JSON wrapper in batch responses    case "seo_desc":  return 450;    default:          return 500;  }}// ΓöÇΓöÇ HTML post-processing ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇfunction cleanTranslatedHtml(html: string, source: string): string {  let out = html;  // ΓöÇΓöÇ 0. Strip markdown code fences the model sometimes wraps output in ΓöÇΓöÇΓöÇΓöÇ  // Handles ```html ... ```, ``` ... ```, and leading/trailing ``` lines  out = out.replace(/^```(?:html)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();  // ΓöÇΓöÇ 0b. Strip accidental <html>/<head>/<body> document wrappers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  out = out    .replace(/^[\s\S]*?<body[^>]*>/i, "")   // everything up to and including <body>    .replace(/<\/body>[\s\S]*$/i, "")        // everything from </body> onward    .replace(/<\/?html[^>]*>/gi, "")    .replace(/<\/?head[^>]*>/gi, "")    .trim();  // ΓöÇΓöÇ 1. Unwrap bracket tags the model wrapped in <p> ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  const bracketTags = [    "short_description",    "/short_description",    "product_description",    "/product_description",  ];  for (const tag of bracketTags) {    const e = tag.replace("/", "\\/");    out = out.replace(new RegExp(`<p>\\s*\\[${e}\\]\\s*<\\/p>`, "g"), `[${tag}]`);    out = out.replace(new RegExp(`<p>\\s*(\\[${e}\\])`, "g"), "$1");    out = out.replace(new RegExp(`(\\[${e}\\])\\s*<\\/p>`, "g"), "$1");  }  // ΓöÇΓöÇ 1b. Ensure bracket tags are each on their own line ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  for (const bt of ["[short_description]", "[/short_description]", "[product_description]", "[/product_description]"]) {    const esc = bt.replace(/[[\]/]/g, "\\$&");    // Add newline before bracket tag if it isn't already at start of a line    out = out.replace(new RegExp(`([^\\n])${esc}`, "g"), `$1\n${bt}`);    // Add newline after bracket tag if it isn't already at end of a line    out = out.replace(new RegExp(`${esc}([^\\n])`, "g"), `${bt}\n$1`);  }  // ΓöÇΓöÇ 1c. Restore blank line between </p> and <p> when source had it ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  if (/\<\/p\>[\s]*\n[\s]*\n[\s]*\<p\>/i.test(source)) {    out = out.replace(/<\/p>[ \t]*\n?[ \t]*<p>/g, "</p>\n\n<p>");  }  // ΓöÇΓöÇ 2. Restore bracket tags the model dropped entirely ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  // If a bracket tag exists in source but is completely absent in output, inject it.  const allBracketTags = [    "[short_description]",    "[/short_description]",    "[product_description]",    "[/product_description]",  ];  for (const bt of allBracketTags) {    if (source.includes(bt) && !out.includes(bt)) {      // Find its nearest neighbor in the source to re-anchor insertion point      const srcIdx = source.indexOf(bt);      // Try to insert before/after the most structurally similar surrounding content      // Simple fallback: append at end with a blank line separator      console.warn(`[cleanHtml] Restoring missing bracket tag: ${bt}`);      out = out.trimEnd() + `\n\n${bt}`;    }  }  // ΓöÇΓöÇ 3. Fix merged [/short_description] [product_description] ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  out = out.replace(    /\[\/short_description\][\s\S]*?\[product_description\]/g,    "[/short_description]\n\n[product_description]"  );  // ΓöÇΓöÇ 4. Remove <p> wrapper incorrectly added inside <li> ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  out = out.replace(/<li>\s*<p>([\s\S]*?)<\/p>\s*<\/li>/g, "<li>$1</li>");  // ΓöÇΓöÇ 5. Restore missing <div class="more-description"> ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  const sourceHasDiv = source.includes('<div class="more-description">');  const outMissingDiv =    out.includes("[product_description]") &&    !/<div\s+class="more-description">/.test(out);  if (sourceHasDiv && outMissingDiv) {    out = out.replace(      "[product_description]",      '[product_description]\n<div class="more-description">'    );  }  // ΓöÇΓöÇ 6. Re-expand collapsed lines ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  const sourceLines = source.split("\n").length;  const outLines    = out.split("\n").length;  if (outLines < sourceLines * 0.5) {    out = out      .replace(/(<\/?[a-zA-Z])/g, "\n$1")      .replace(/(\[)/g, "\n$1")      .replace(/\n{3,}/g, "\n\n")      .trim();  }  return out;}// ΓöÇΓöÇ Language helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ/** Maps common ISO-639-1 codes to full language names used in prompts. */const LOCALE_NAMES: Record<string, string> = {  ru: "Russian", en: "English", fr: "French", de: "German",  es: "Spanish", it: "Italian", pt: "Portuguese", zh: "Chinese",  ja: "Japanese", ko: "Korean", ar: "Arabic", tr: "Turkish",  pl: "Polish", nl: "Dutch", sv: "Swedish", uk: "Ukrainian",  he: "Hebrew", fa: "Persian", hi: "Hindi", id: "Indonesian",};function localeName(code: string): string {  return LOCALE_NAMES[code.toLowerCase()] ?? code;}/** * Prepends a language directive to the system prompt so the model always * knows the language pair, even when the base prompt is fully custom. */function withLanguageDirective(systemPrompt: string, src: string, tgt: string): string {  const srcName = localeName(src);  const tgtName = localeName(tgt);  const header = [    `You are a professional e-commerce translator.`,    ``,    `Translate ALL input text from ${srcName} to ${tgtName}.`,    ``,    `CRITICAL RULES:`,    `- ALWAYS output in ${tgtName}`,    `- NEVER output in ${srcName}`,    `- Do NOT leave text unchanged`,    `- Preserve meaning and formatting`,  ].join("\n");  return `${header}\n\n${systemPrompt}`;}// ΓöÇΓöÇ Translation validation helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ/** True when the text contains at least one Cyrillic character. */function containsCyrillic(text: string): boolean {  return /[\u0400-\u04FF]/.test(text);}/** * Returns true when a "translation" is identical to its source after trimming. * For Russian sources, requires Cyrillic to be present to avoid false positives * on brand names and already-English fields. For other source languages, any * non-empty identical string is treated as untranslated. */function isUntranslated(source: string, translation: string, srcLang = "ru"): boolean {  if (source.trim() !== translation.trim()) return false;  if (source.trim().length === 0) return false;  if (srcLang === "ru") return containsCyrillic(source);  return true;}/** * Languages whose written script uses Cyrillic ΓÇö output is expected to contain Cyrillic. * For all other target languages, any Cyrillic in the output means the model failed to translate. */const CYRILLIC_TARGET_LANGS = new Set([  "ru", "uk", "bg", "sr", "mk", "be", "mn", "kk", "ky", "tg",]);/** * Returns true when the translation output is predominantly in the wrong language. * Uses a 50% threshold ΓÇö allows legitimate Cyrillic brand names / place names in an * otherwise-English translation (e.g. "Shrimps ╨£╨░╨│╨░╨┤╨░╨╜ frozen") while still catching * fully-Russian output (e.g. "╨Ü╤Ç╨╡╨▓╨╡╤é╨║╨╕ ╨£╨░╨│╨░╨┤╨░╨╜ ╨╖╨░╨╝╨╛╤Ç╨╛╨╢╨╡╨╜╨╜╤ï╨╡"). */function isWrongTargetLanguage(translation: string, tgtLang: string): boolean {  if (CYRILLIC_TARGET_LANGS.has(tgtLang.toLowerCase())) return false;  const letters = translation.replace(/[^a-zA-Z\u0400-\u04FF]/g, "");  if (letters.length < 4) return false; // too short to judge reliably  const cyrillicCount = (translation.match(/[\u0400-\u04FF]/g) ?? []).length;  return cyrillicCount / letters.length > 0.5; // majority Cyrillic = wrong language}// ΓöÇΓöÇ Batch translation (one OpenAI call for all non-HTML fields) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ/** * Fires one OpenAI call and attempts to parse the JSON response. * Throws a TypeError with the raw response attached if parsing fails. */async function callBatchOnce(  fields: TranslateRequestField[],  model: string,  systemPrompt: string,  openai: OpenAI,  srcLang: string,  tgtLang: string,  usageCollector?: UsageCollector,): Promise<Map<string, string>> {  const srcName = localeName(srcLang);  const tgtName = localeName(tgtLang);  const inputPayload = fields.map((f) => ({    key: f.key,    instruction: fieldTypeInstruction(f.fieldType, srcName, tgtName),    text: f.text,  }));  const userMessage =    `Translate each item from ${srcName} to ${tgtName} following its instruction.\n` +    `Output ONLY in ${tgtName} ΓÇö NEVER in ${srcName}.\n` +    `Return a JSON object with a "translations" array in this exact format:\n` +    `{"translations":[{"key":"<key>","translation":"<translated text>"}...]}\n\n` +    `Items to translate:\n` +    JSON.stringify(inputPayload, null, 2);  const maxTokens = Math.min(    fields.reduce((sum, f) => sum + getMaxTokens(f.fieldType), 0) + 200,    4096  );  const completion = await openai.chat.completions.create({    model,    messages: [      { role: "system",    content: systemPrompt },      { role: "user",      content: FEW_SHOT_USER },      { role: "assistant", content: FEW_SHOT_ASSISTANT },      { role: "user",      content: userMessage },    ],    temperature: 0.2,    max_tokens: maxTokens,    response_format: { type: "json_object" },  });  const raw = completion.choices[0]?.message?.content?.trim() ?? "";  console.log(`[translate/batch] model=${model} raw_response=${raw.slice(0, 400)}`);  if (usageCollector && completion.usage) {    usageCollector.push({      prompt_tokens:     completion.usage.prompt_tokens,      completion_tokens: completion.usage.completion_tokens,      total_tokens:      completion.usage.total_tokens,    });  }  let parsed: Array<{ key: string; translation: string }>;  try {    const obj = JSON.parse(raw) as unknown;    if (Array.isArray(obj)) {      // Model returned [...] directly      parsed = obj as typeof parsed;    } else if (obj && typeof obj === "object" && "translations" in obj) {      // Correct format: {"translations": [...]}      parsed = (obj as { translations: typeof parsed }).translations;    } else if (obj && typeof obj === "object" && "key" in obj && "translation" in obj) {      // Model returned a single translation object instead of an array ΓÇö wrap it      parsed = [obj as { key: string; translation: string }];    } else {      // Last resort: find any array value in the object      const arr = Object.values(obj as Record<string, unknown>).find(Array.isArray);      parsed = (arr ?? []) as typeof parsed;    }  } catch (e) {    // Attach raw response to the error so the caller can log it    const err = new Error(`JSON parse failed: ${(e as Error).message}`);    (err as Error & { rawResponse: string }).rawResponse = raw;    throw err;  }  return new Map(parsed.map((p) => [p.key, p.translation ?? ""]));}async function translateBatch(  fields: TranslateRequestField[],  model: string,  systemPrompt: string,  openai: OpenAI,  srcLang: string,  tgtLang: string,  usageCollector?: UsageCollector,): Promise<TranslateResponseField[]> {  if (fields.length === 0) return [];  let byKey: Map<string, string> | null = null;  // ΓöÇΓöÇ Attempt 1 ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  try {    byKey = await callBatchOnce(fields, model, systemPrompt, openai, srcLang, tgtLang, usageCollector);  } catch (e1) {    const raw1 = (e1 as Error & { rawResponse?: string }).rawResponse ?? "";    console.error("[translate/batch] Parse failed (attempt 1), retrying.", raw1.slice(0, 500));    // ΓöÇΓöÇ Attempt 2 (one retry) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ    try {      byKey = await callBatchOnce(fields, model, systemPrompt, openai, srcLang, tgtLang, usageCollector);      console.log("[translate/batch] Retry succeeded.");    } catch (e2) {      const raw2 = (e2 as Error & { rawResponse?: string }).rawResponse ?? "";      console.error("[translate/batch] Parse failed (attempt 2), using source fallback.", raw2.slice(0, 500));      return fields.map((f) => ({        key: f.key,        translation: f.text,        error: "parse_failed",      }));    }  }  // ΓöÇΓöÇ Map results back; use source text for any key missing from response ΓöÇΓöÇΓöÇ  return fields.map((f) => {    const translation = byKey!.get(f.key);    if (translation !== undefined && translation !== "") {      if (isUntranslated(f.text, translation, srcLang)) {        console.warn(`[translate/batch] Identical to source for key "${f.key}" ΓÇö no_translation_detected.`);        return { key: f.key, translation: f.text, error: "no_translation_detected" };      }      if (isWrongTargetLanguage(translation, tgtLang)) {        console.warn(`[translate/batch] Wrong language in output for key "${f.key}" ΓÇö no_translation_detected.`);        return { key: f.key, translation: f.text, error: "no_translation_detected" };      }      return { key: f.key, translation };    }    console.warn(`[translate/batch] Missing translation for key "${f.key}", using source text.`);    return { key: f.key, translation: f.text, error: "parse_failed" };  });}// ΓöÇΓöÇ Single HTML field translation ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇasync function translateHtmlField(  field: TranslateRequestField,  model: string,  systemPrompt: string,  openai: OpenAI,  srcLang: string,  tgtLang: string,  usageCollector?: UsageCollector,): Promise<TranslateResponseField> {  const srcName = localeName(srcLang);  const tgtName = localeName(tgtLang);  const completion = await openai.chat.completions.create({    model,    messages: [      { role: "system",    content: systemPrompt },      { role: "user",      content: FEW_SHOT_USER },      { role: "assistant", content: FEW_SHOT_ASSISTANT },      { role: "user",      content: fieldTypeInstruction("html", srcName, tgtName) + field.text },    ],    temperature: 0.2,    max_tokens: getMaxTokens("html"),  });  if (usageCollector && completion.usage) {    usageCollector.push({      prompt_tokens:     completion.usage.prompt_tokens,      completion_tokens: completion.usage.completion_tokens,      total_tokens:      completion.usage.total_tokens,    });  }  const raw = completion.choices[0]?.message?.content?.trim() ?? "";  console.log(`[translate/html] key=${field.key} raw=${raw.slice(0, 300)}`);  const translation = cleanTranslatedHtml(raw, field.text);  console.log(`[translate/html] key=${field.key} cleaned=${translation.slice(0, 300)}`);  if (isUntranslated(field.text, translation, srcLang)) {    console.warn(`[translate/html] Identical to source for key "${field.key}" ΓÇö no_translation_detected.`);    return { key: field.key, translation: field.text, error: "no_translation_detected" };  }  if (isWrongTargetLanguage(translation, tgtLang)) {    console.warn(`[translate/html] Wrong language in output for key "${field.key}" ΓÇö no_translation_detected.`);    return { key: field.key, translation: field.text, error: "no_translation_detected" };  }  return { key: field.key, translation };}// ΓöÇΓöÇ Route handler ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇexport async function POST(req: NextRequest) {  if (!process.env.OPENAI_API_KEY) {    return NextResponse.json(      { error: "OPENAI_API_KEY is not configured. Add it to .env.local and restart." },      { status: 500 }    );  }  let fields: TranslateRequestField[];  let requestModel: string = DEFAULT_MODEL;  let requestPrompt: string = SYSTEM_PROMPT;  let requestGlossary: string = "";  let srcLang = "ru";  let tgtLang = "en";  let shopDomain = "unknown";  try {    const body = await req.json();    fields = body.fields;    if (!Array.isArray(fields) || fields.length === 0) {      return NextResponse.json({ error: "No fields provided" }, { status: 400 });    }    if (body.model && typeof body.model === "string") requestModel = body.model;    if (body.systemPrompt && typeof body.systemPrompt === "string") requestPrompt = body.systemPrompt;    if (body.glossary && typeof body.glossary === "string") requestGlossary = body.glossary;    if (body.sourceLanguage && typeof body.sourceLanguage === "string") srcLang = body.sourceLanguage.trim() || "ru";    if (body.targetLanguage && typeof body.targetLanguage === "string") tgtLang = body.targetLanguage.trim() || "en";    if (body.shopifyDomain && typeof body.shopifyDomain === "string") shopDomain = body.shopifyDomain.trim() || "unknown";  } catch {    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });  }  // Replace {{source_language}} / {{target_language}} placeholders the user  // may have typed in their custom system prompt (single or double braces).  const srcName = localeName(srcLang);  const tgtName = localeName(tgtLang);  requestPrompt = requestPrompt    .replace(/\{\{source_language\}\}/gi, srcName)    .replace(/\{\{target_language\}\}/gi, tgtName)    .replace(/\{source_language\}/gi, srcName)    .replace(/\{target_language\}/gi, tgtName);  // Prepend language directive header, then append glossary  requestPrompt = withLanguageDirective(requestPrompt, srcLang, tgtLang);  requestPrompt = withGlossary(requestPrompt, requestGlossary);  // Hard-coded prefix injected at the very top of the system prompt.  // This is never shown in Settings and cannot be overridden by the user prompt.  const systemPrefix = `CRITICAL LANGUAGE RULES:- You MUST translate all input text into the target language- You MUST NOT return the original source language text- You are NOT allowed to return the input unchanged- Even for very short text, ALWAYS translate`;  const finalPrompt = systemPrefix + "\n\n" + requestPrompt;  const toTranslate = fields.filter((f) => f.text && f.text.trim().length > 0);  if (toTranslate.length === 0) {    return NextResponse.json({ fields: [] });  }  try {    const openai = getOpenAIClient();    const usageCollector = makeUsageCollector();    // Split fields: HTML needs individual calls; everything else batches into one    const htmlFields  = toTranslate.filter((f) => f.fieldType === "html");    const plainFields = toTranslate.filter((f) => f.fieldType !== "html");    // Run: one batch call for all plain fields + one call per HTML field (in parallel)    const [batchResults, ...htmlResults] = await Promise.all([      translateBatch(plainFields, requestModel, finalPrompt, openai, srcLang, tgtLang, usageCollector),      ...htmlFields.map((f) => translateHtmlField(f, requestModel, finalPrompt, openai, srcLang, tgtLang, usageCollector)),    ]);    // Log usage non-blocking ΓÇö never throws, never delays response    const totalUsage = sumUsage(usageCollector);    if (totalUsage.total_tokens > 0) {      logOpenAIUsage({        shop_domain:       shopDomain,        model:             requestModel,        prompt_tokens:     totalUsage.prompt_tokens,        completion_tokens: totalUsage.completion_tokens,        total_tokens:      totalUsage.total_tokens,        request_type:      "translate",      });    }    // Merge results preserving original field order    const allResults = [...batchResults, ...htmlResults];    const parseFailed = allResults.filter((r) => r.error === "parse_failed");    if (parseFailed.length > 0) {      logAppEvent({        shop_domain: shopDomain,        action:      "translate_error",        status:      "warn",        message:     `Translation parse failed for ${parseFailed.length} field(s) ΓÇö source text used as fallback`,        metadata:    { model: requestModel, failed_keys: parseFailed.map((r) => r.key) },      });    }    const resultMap = new Map<string, string>();    for (const r of allResults) resultMap.set(r.key, r.translation);    const results: TranslateResponseField[] = toTranslate.map((f) => ({      key: f.key,      translation: resultMap.get(f.key) ?? "",    }));    return NextResponse.json({ fields: results });  } catch (err) {    const raw = err instanceof Error ? err.message : "";    if (raw.includes("429") || raw.toLowerCase().includes("rate limit")) {      logAppEvent({        shop_domain: shopDomain,        action:      "translate_error",        status:      "warn",        message:     `OpenAI rate limit hit`,        metadata:    { model: requestModel },      });      return NextResponse.json(        {          error:            "You've hit the OpenAI translation limit for this minute (too many words sent at once). " +            "Wait about 60 seconds, then try again. " +            "If this keeps happening, go to Settings and switch to GPT-4o mini ΓÇö it has a much higher limit and is faster for bulk work.",        },        { status: 429 }      );    }    logAppEvent({      shop_domain: shopDomain,      action:      "translate_error",      status:      "error",      message:     `Translation failed: ${raw || "unknown error"}`,      metadata:    { model: requestModel },    });    const message = raw || "Translation failed ΓÇö please try again.";    return NextResponse.json({ error: message }, { status: 500 });  }}
+import { NextRequest, NextResponse } from "next/server";
+import OpenAI from "openai";
+import { TranslateRequestField, TranslateResponseField, FieldType } from "@/types";
+import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT } from "@/lib/translationDefaults";
+import {
+  makeUsageCollector,
+  sumUsage,
+  logOpenAIUsage,
+  type UsageCollector,
+} from "@/lib/server/openaiUsageLogger";
+import { logAppEvent } from "@/lib/server/appEventLogger";
+
+function getOpenAIClient() {
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
+
+const SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT;
+
+const FEW_SHOT_USER = `Варенье черничное Лукашинские - купить в Дубае`;
+const FEW_SHOT_ASSISTANT = `Lukashinskie Blueberry Jam – Buy in Dubai`;
+
+function withGlossary(systemPrompt: string, glossaryRaw: string): string {
+  const pairs = glossaryRaw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line.includes("="))
+    .map((line) => {
+      const [src, ...rest] = line.split("=");
+      return {
+        src: src.trim(),
+        dst: rest.join("=").trim(),
+      };
+    })
+    .filter((p) => p.src.length > 0 && p.dst.length > 0);
+
+  if (pairs.length === 0) return systemPrompt;
+
+  const glossaryBlock =
+    "Glossary rules (apply to all fields):\n" +
+    pairs.map((p) => `- ${p.src} => ${p.dst}`).join("\n") +
+    "\nUse the glossary terms exactly when the source term appears.";
+
+  return `${systemPrompt}\n\n${glossaryBlock}`;
+}
+
+// ── Per-field type instructions (used for HTML and as hints in batch) ─────
+function fieldTypeInstruction(fieldType: FieldType, src = "Russian", tgt = "English"): string {
+  switch (fieldType) {
+    case "html":
+      return (
+        `Translate the following product description from ${src} to ${tgt}.\n` +
+        `CRITICAL FORMATTING RULES — violating any of these will break the storefront:\n` +
+        `- Output ONLY the translated HTML — no markdown, no code fences (\`\`\`), no explanation\n` +
+        `- Do NOT wrap output in <html>, <head>, or <body> tags\n` +
+        `- Reproduce EVERY HTML tag verbatim in the same position (<div>, <h2>, <ul>, <li>, <p>, <strong>, etc.)\n` +
+        `- Bracket tags [short_description] [/short_description] [product_description] [/product_description] MUST be preserved exactly as-is on their own lines — NEVER remove, rename, or wrap them in <p> or any other tag\n` +
+        `- Preserve ALL blank lines between sections exactly as in the source\n` +
+        `- Do NOT collapse multiple lines into one — every line break in the input must appear in the output\n` +
+        `- Do NOT add any new tags that are not in the source\n\n`
+      );
+    case "seo_title":
+      return (
+        `Translate this SEO meta title from ${src} to ${tgt}. ` +
+        `Plain text only; max 60 characters; translate exactly what is written — do NOT add phrases not present in the source. `
+      );
+    case "seo_desc":
+      return (
+        `Translate this SEO meta description from ${src} to ${tgt}. ` +
+        `Plain text only; max 160 characters; translate exactly what is written — do NOT add phrases not present in the source. `
+      );
+    default:
+      return `Translate from ${src} to ${tgt}. Plain text, no HTML. Translate only — do not add, remove, or rephrase content. `;
+  }
+}
+
+function getMaxTokens(fieldType: FieldType): number {
+  switch (fieldType) {
+    case "html":      return 4000;
+    case "seo_title": return 250;  // extra headroom for JSON wrapper in batch responses
+    case "seo_desc":  return 450;
+    default:          return 500;
+  }
+}
+
+// ── HTML post-processing ───────────────────────────────────────────────────
+function cleanTranslatedHtml(html: string, source: string): string {
+  let out = html;
+
+  // ── 0. Strip markdown code fences the model sometimes wraps output in ────
+  // Handles ```html ... ```, ``` ... ```, and leading/trailing ``` lines
+  out = out.replace(/^```(?:html)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+
+  // ── 0b. Strip accidental <html>/<head>/<body> document wrappers ───────────
+  out = out
+    .replace(/^[\s\S]*?<body[^>]*>/i, "")   // everything up to and including <body>
+    .replace(/<\/body>[\s\S]*$/i, "")        // everything from </body> onward
+    .replace(/<\/?html[^>]*>/gi, "")
+    .replace(/<\/?head[^>]*>/gi, "")
+    .trim();
+
+  // ── 1. Unwrap bracket tags the model wrapped in <p> ──────────────────────
+  const bracketTags = [
+    "short_description",
+    "/short_description",
+    "product_description",
+    "/product_description",
+  ];
+  for (const tag of bracketTags) {
+    const e = tag.replace("/", "\\/");
+    out = out.replace(new RegExp(`<p>\\s*\\[${e}\\]\\s*<\\/p>`, "g"), `[${tag}]`);
+    out = out.replace(new RegExp(`<p>\\s*(\\[${e}\\])`, "g"), "$1");
+    out = out.replace(new RegExp(`(\\[${e}\\])\\s*<\\/p>`, "g"), "$1");
+  }
+
+  // ── 1b. Ensure bracket tags are each on their own line ───────────────────
+  for (const bt of ["[short_description]", "[/short_description]", "[product_description]", "[/product_description]"]) {
+    const esc = bt.replace(/[[\]/]/g, "\\$&");
+    // Add newline before bracket tag if it isn't already at start of a line
+    out = out.replace(new RegExp(`([^\\n])${esc}`, "g"), `$1\n${bt}`);
+    // Add newline after bracket tag if it isn't already at end of a line
+    out = out.replace(new RegExp(`${esc}([^\\n])`, "g"), `${bt}\n$1`);
+  }
+
+  // ── 1c. Restore blank line between </p> and <p> when source had it ────────
+  if (/\<\/p\>[\s]*\n[\s]*\n[\s]*\<p\>/i.test(source)) {
+    out = out.replace(/<\/p>[ \t]*\n?[ \t]*<p>/g, "</p>\n\n<p>");
+  }
+
+  // ── 2. Restore bracket tags the model dropped entirely ───────────────────
+  // If a bracket tag exists in source but is completely absent in output, inject it.
+  const allBracketTags = [
+    "[short_description]",
+    "[/short_description]",
+    "[product_description]",
+    "[/product_description]",
+  ];
+  for (const bt of allBracketTags) {
+    if (source.includes(bt) && !out.includes(bt)) {
+      // Find its nearest neighbor in the source to re-anchor insertion point
+      const srcIdx = source.indexOf(bt);
+      // Try to insert before/after the most structurally similar surrounding content
+      // Simple fallback: append at end with a blank line separator
+      console.warn(`[cleanHtml] Restoring missing bracket tag: ${bt}`);
+      out = out.trimEnd() + `\n\n${bt}`;
+    }
+  }
+
+  // ── 3. Fix merged [/short_description] [product_description] ─────────────
+  out = out.replace(
+    /\[\/short_description\][\s\S]*?\[product_description\]/g,
+    "[/short_description]\n\n[product_description]"
+  );
+
+  // ── 4. Remove <p> wrapper incorrectly added inside <li> ──────────────────
+  out = out.replace(/<li>\s*<p>([\s\S]*?)<\/p>\s*<\/li>/g, "<li>$1</li>");
+
+  // ── 5. Restore missing <div class="more-description"> ────────────────────
+  const sourceHasDiv = source.includes('<div class="more-description">');
+  const outMissingDiv =
+    out.includes("[product_description]") &&
+    !/<div\s+class="more-description">/.test(out);
+  if (sourceHasDiv && outMissingDiv) {
+    out = out.replace(
+      "[product_description]",
+      '[product_description]\n<div class="more-description">'
+    );
+  }
+
+  // ── 6. Re-expand collapsed lines ─────────────────────────────────────────
+  const sourceLines = source.split("\n").length;
+  const outLines    = out.split("\n").length;
+  if (outLines < sourceLines * 0.5) {
+    out = out
+      .replace(/(<\/?[a-zA-Z])/g, "\n$1")
+      .replace(/(\[)/g, "\n$1")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  return out;
+}
+
+// ── Language helpers ──────────────────────────────────────────────────────
+
+/** Maps common ISO-639-1 codes to full language names used in prompts. */
+const LOCALE_NAMES: Record<string, string> = {
+  ru: "Russian", en: "English", fr: "French", de: "German",
+  es: "Spanish", it: "Italian", pt: "Portuguese", zh: "Chinese",
+  ja: "Japanese", ko: "Korean", ar: "Arabic", tr: "Turkish",
+  pl: "Polish", nl: "Dutch", sv: "Swedish", uk: "Ukrainian",
+  he: "Hebrew", fa: "Persian", hi: "Hindi", id: "Indonesian",
+};
+
+function localeName(code: string): string {
+  return LOCALE_NAMES[code.toLowerCase()] ?? code;
+}
+
+/**
+ * Prepends a language directive to the system prompt so the model always
+ * knows the language pair, even when the base prompt is fully custom.
+ */
+function withLanguageDirective(systemPrompt: string, src: string, tgt: string): string {
+  const srcName = localeName(src);
+  const tgtName = localeName(tgt);
+  const header = [
+    `You are a professional e-commerce translator.`,
+    ``,
+    `Translate ALL input text from ${srcName} to ${tgtName}.`,
+    ``,
+    `CRITICAL RULES:`,
+    `- ALWAYS output in ${tgtName}`,
+    `- NEVER output in ${srcName}`,
+    `- Do NOT leave text unchanged`,
+    `- Preserve meaning and formatting`,
+  ].join("\n");
+  return `${header}\n\n${systemPrompt}`;
+}
+
+// ── Translation validation helpers ───────────────────────────────────────
+
+/** True when the text contains at least one Cyrillic character. */
+function containsCyrillic(text: string): boolean {
+  return /[\u0400-\u04FF]/.test(text);
+}
+
+/**
+ * Returns true when a "translation" is identical to its source after trimming.
+ * For Russian sources, requires Cyrillic to be present to avoid false positives
+ * on brand names and already-English fields. For other source languages, any
+ * non-empty identical string is treated as untranslated.
+ */
+function isUntranslated(source: string, translation: string, srcLang = "ru"): boolean {
+  if (source.trim() !== translation.trim()) return false;
+  if (source.trim().length === 0) return false;
+  if (srcLang === "ru") return containsCyrillic(source);
+  return true;
+}
+
+/**
+ * Languages whose written script uses Cyrillic — output is expected to contain Cyrillic.
+ * For all other target languages, any Cyrillic in the output means the model failed to translate.
+ */
+const CYRILLIC_TARGET_LANGS = new Set([
+  "ru", "uk", "bg", "sr", "mk", "be", "mn", "kk", "ky", "tg",
+]);
+
+/**
+ * Returns true when the translation output is predominantly in the wrong language.
+ * Uses a 50% threshold — allows legitimate Cyrillic brand names / place names in an
+ * otherwise-English translation (e.g. "Shrimps Магадан frozen") while still catching
+ * fully-Russian output (e.g. "Креветки Магадан замороженные").
+ */
+function isWrongTargetLanguage(translation: string, tgtLang: string): boolean {
+  if (CYRILLIC_TARGET_LANGS.has(tgtLang.toLowerCase())) return false;
+  const letters = translation.replace(/[^a-zA-Z\u0400-\u04FF]/g, "");
+  if (letters.length < 4) return false; // too short to judge reliably
+  const cyrillicCount = (translation.match(/[\u0400-\u04FF]/g) ?? []).length;
+  return cyrillicCount / letters.length > 0.5; // majority Cyrillic = wrong language
+}
+
+// ── Batch translation (one OpenAI call for all non-HTML fields) ────────────
+
+/**
+ * Fires one OpenAI call and attempts to parse the JSON response.
+ * Throws a TypeError with the raw response attached if parsing fails.
+ */
+async function callBatchOnce(
+  fields: TranslateRequestField[],
+  model: string,
+  systemPrompt: string,
+  openai: OpenAI,
+  srcLang: string,
+  tgtLang: string,
+  usageCollector?: UsageCollector,
+): Promise<Map<string, string>> {
+  const srcName = localeName(srcLang);
+  const tgtName = localeName(tgtLang);
+  const inputPayload = fields.map((f) => ({
+    key: f.key,
+    instruction: fieldTypeInstruction(f.fieldType, srcName, tgtName),
+    text: f.text,
+  }));
+
+  const userMessage =
+    `Translate each item from ${srcName} to ${tgtName} following its instruction.\n` +
+    `Output ONLY in ${tgtName} — NEVER in ${srcName}.\n` +
+    `Return a JSON object with a "translations" array in this exact format:\n` +
+    `{"translations":[{"key":"<key>","translation":"<translated text>"}...]}\n\n` +
+    `Items to translate:\n` +
+    JSON.stringify(inputPayload, null, 2);
+
+  const maxTokens = Math.min(
+    fields.reduce((sum, f) => sum + getMaxTokens(f.fieldType), 0) + 200,
+    4096
+  );
+
+  const completion = await openai.chat.completions.create({
+    model,
+    messages: [
+      { role: "system",    content: systemPrompt },
+      { role: "user",      content: FEW_SHOT_USER },
+      { role: "assistant", content: FEW_SHOT_ASSISTANT },
+      { role: "user",      content: userMessage },
+    ],
+    temperature: 0.2,
+    max_tokens: maxTokens,
+    response_format: { type: "json_object" },
+  });
+
+  const raw = completion.choices[0]?.message?.content?.trim() ?? "";
+  console.log(`[translate/batch] model=${model} raw_response=${raw.slice(0, 400)}`);
+
+  if (usageCollector && completion.usage) {
+    usageCollector.push({
+      prompt_tokens:     completion.usage.prompt_tokens,
+      completion_tokens: completion.usage.completion_tokens,
+      total_tokens:      completion.usage.total_tokens,
+    });
+  }
+
+  let parsed: Array<{ key: string; translation: string }>;
+  try {
+    const obj = JSON.parse(raw) as unknown;
+    if (Array.isArray(obj)) {
+      // Model returned [...] directly
+      parsed = obj as typeof parsed;
+    } else if (obj && typeof obj === "object" && "translations" in obj) {
+      // Correct format: {"translations": [...]}
+      parsed = (obj as { translations: typeof parsed }).translations;
+    } else if (obj && typeof obj === "object" && "key" in obj && "translation" in obj) {
+      // Model returned a single translation object instead of an array — wrap it
+      parsed = [obj as { key: string; translation: string }];
+    } else {
+      // Last resort: find any array value in the object
+      const arr = Object.values(obj as Record<string, unknown>).find(Array.isArray);
+      parsed = (arr ?? []) as typeof parsed;
+    }
+  } catch (e) {
+    // Attach raw response to the error so the caller can log it
+    const err = new Error(`JSON parse failed: ${(e as Error).message}`);
+    (err as Error & { rawResponse: string }).rawResponse = raw;
+    throw err;
+  }
+
+  return new Map(parsed.map((p) => [p.key, p.translation ?? ""]));
+}
+
+async function translateBatch(
+  fields: TranslateRequestField[],
+  model: string,
+  systemPrompt: string,
+  openai: OpenAI,
+  srcLang: string,
+  tgtLang: string,
+  usageCollector?: UsageCollector,
+): Promise<TranslateResponseField[]> {
+  if (fields.length === 0) return [];
+
+  let byKey: Map<string, string> | null = null;
+
+  // ── Attempt 1 ────────────────────────────────────────────────────────────
+  try {
+    byKey = await callBatchOnce(fields, model, systemPrompt, openai, srcLang, tgtLang, usageCollector);
+  } catch (e1) {
+    const raw1 = (e1 as Error & { rawResponse?: string }).rawResponse ?? "";
+    console.error("[translate/batch] Parse failed (attempt 1), retrying.", raw1.slice(0, 500));
+
+    // ── Attempt 2 (one retry) ───────────────────────────────────────────────
+    try {
+      byKey = await callBatchOnce(fields, model, systemPrompt, openai, srcLang, tgtLang, usageCollector);
+      console.log("[translate/batch] Retry succeeded.");
+    } catch (e2) {
+      const raw2 = (e2 as Error & { rawResponse?: string }).rawResponse ?? "";
+      console.error("[translate/batch] Parse failed (attempt 2), using source fallback.", raw2.slice(0, 500));
+      return fields.map((f) => ({
+        key: f.key,
+        translation: f.text,
+        error: "parse_failed",
+      }));
+    }
+  }
+
+  // ── Map results back; use source text for any key missing from response ───
+  return fields.map((f) => {
+    const translation = byKey!.get(f.key);
+    if (translation !== undefined && translation !== "") {
+      if (isUntranslated(f.text, translation, srcLang)) {
+        console.warn(`[translate/batch] Identical to source for key "${f.key}" — no_translation_detected.`);
+        return { key: f.key, translation: f.text, error: "no_translation_detected" };
+      }
+      if (isWrongTargetLanguage(translation, tgtLang)) {
+        console.warn(`[translate/batch] Wrong language in output for key "${f.key}" — no_translation_detected.`);
+        return { key: f.key, translation: f.text, error: "no_translation_detected" };
+      }
+      return { key: f.key, translation };
+    }
+    console.warn(`[translate/batch] Missing translation for key "${f.key}", using source text.`);
+    return { key: f.key, translation: f.text, error: "parse_failed" };
+  });
+}
+
+// ── Single HTML field translation ──────────────────────────────────────────
+async function translateHtmlField(
+  field: TranslateRequestField,
+  model: string,
+  systemPrompt: string,
+  openai: OpenAI,
+  srcLang: string,
+  tgtLang: string,
+  usageCollector?: UsageCollector,
+): Promise<TranslateResponseField> {
+  const srcName = localeName(srcLang);
+  const tgtName = localeName(tgtLang);
+  const completion = await openai.chat.completions.create({
+    model,
+    messages: [
+      { role: "system",    content: systemPrompt },
+      { role: "user",      content: FEW_SHOT_USER },
+      { role: "assistant", content: FEW_SHOT_ASSISTANT },
+      { role: "user",      content: fieldTypeInstruction("html", srcName, tgtName) + field.text },
+    ],
+    temperature: 0.2,
+    max_tokens: getMaxTokens("html"),
+  });
+  if (usageCollector && completion.usage) {
+    usageCollector.push({
+      prompt_tokens:     completion.usage.prompt_tokens,
+      completion_tokens: completion.usage.completion_tokens,
+      total_tokens:      completion.usage.total_tokens,
+    });
+  }
+  const raw = completion.choices[0]?.message?.content?.trim() ?? "";
+  console.log(`[translate/html] key=${field.key} raw=${raw.slice(0, 300)}`);
+  const translation = cleanTranslatedHtml(raw, field.text);
+  console.log(`[translate/html] key=${field.key} cleaned=${translation.slice(0, 300)}`);
+  if (isUntranslated(field.text, translation, srcLang)) {
+    console.warn(`[translate/html] Identical to source for key "${field.key}" — no_translation_detected.`);
+    return { key: field.key, translation: field.text, error: "no_translation_detected" };
+  }
+  if (isWrongTargetLanguage(translation, tgtLang)) {
+    console.warn(`[translate/html] Wrong language in output for key "${field.key}" — no_translation_detected.`);
+    return { key: field.key, translation: field.text, error: "no_translation_detected" };
+  }
+  return { key: field.key, translation };
+}
+
+// ── Route handler ──────────────────────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  if (!process.env.OPENAI_API_KEY) {
+    return NextResponse.json(
+      { error: "OPENAI_API_KEY is not configured. Add it to .env.local and restart." },
+      { status: 500 }
+    );
+  }
+
+  let fields: TranslateRequestField[];
+  let requestModel: string = DEFAULT_MODEL;
+  let requestPrompt: string = SYSTEM_PROMPT;
+  let requestGlossary: string = "";
+  let srcLang = "ru";
+  let tgtLang = "en";
+  let shopDomain = "unknown";
+
+  try {
+    const body = await req.json();
+    fields = body.fields;
+    if (!Array.isArray(fields) || fields.length === 0) {
+      return NextResponse.json({ error: "No fields provided" }, { status: 400 });
+    }
+    if (body.model && typeof body.model === "string") requestModel = body.model;
+    if (body.systemPrompt && typeof body.systemPrompt === "string") requestPrompt = body.systemPrompt;
+    if (body.glossary && typeof body.glossary === "string") requestGlossary = body.glossary;
+    if (body.sourceLanguage && typeof body.sourceLanguage === "string") srcLang = body.sourceLanguage.trim() || "ru";
+    if (body.targetLanguage && typeof body.targetLanguage === "string") tgtLang = body.targetLanguage.trim() || "en";
+    if (body.shopifyDomain && typeof body.shopifyDomain === "string") shopDomain = body.shopifyDomain.trim() || "unknown";
+  } catch {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+  }
+
+  // Replace {{source_language}} / {{target_language}} placeholders the user
+  // may have typed in their custom system prompt (single or double braces).
+  const srcName = localeName(srcLang);
+  const tgtName = localeName(tgtLang);
+  requestPrompt = requestPrompt
+    .replace(/\{\{source_language\}\}/gi, srcName)
+    .replace(/\{\{target_language\}\}/gi, tgtName)
+    .replace(/\{source_language\}/gi, srcName)
+    .replace(/\{target_language\}/gi, tgtName);
+
+  // Prepend language directive header, then append glossary
+  requestPrompt = withLanguageDirective(requestPrompt, srcLang, tgtLang);
+  requestPrompt = withGlossary(requestPrompt, requestGlossary);
+
+  // Hard-coded prefix injected at the very top of the system prompt.
+  // This is never shown in Settings and cannot be overridden by the user prompt.
+  const systemPrefix = `CRITICAL LANGUAGE RULES:
+- You MUST translate all input text into the target language
+- You MUST NOT return the original source language text
+- You are NOT allowed to return the input unchanged
+- Even for very short text, ALWAYS translate`;
+
+  const finalPrompt = systemPrefix + "\n\n" + requestPrompt;
+
+  const toTranslate = fields.filter((f) => f.text && f.text.trim().length > 0);
+  if (toTranslate.length === 0) {
+    return NextResponse.json({ fields: [] });
+  }
+
+  try {
+    const openai = getOpenAIClient();
+    const usageCollector = makeUsageCollector();
+
+    // Split fields: HTML needs individual calls; everything else batches into one
+    const htmlFields  = toTranslate.filter((f) => f.fieldType === "html");
+    const plainFields = toTranslate.filter((f) => f.fieldType !== "html");
+
+    // Run: one batch call for all plain fields + one call per HTML field (in parallel)
+    const [batchResults, ...htmlResults] = await Promise.all([
+      translateBatch(plainFields, requestModel, finalPrompt, openai, srcLang, tgtLang, usageCollector),
+      ...htmlFields.map((f) => translateHtmlField(f, requestModel, finalPrompt, openai, srcLang, tgtLang, usageCollector)),
+    ]);
+
+    // Log usage non-blocking — never throws, never delays response
+    const totalUsage = sumUsage(usageCollector);
+    if (totalUsage.total_tokens > 0) {
+      logOpenAIUsage({
+        shop_domain:       shopDomain,
+        model:             requestModel,
+        prompt_tokens:     totalUsage.prompt_tokens,
+        completion_tokens: totalUsage.completion_tokens,
+        total_tokens:      totalUsage.total_tokens,
+        request_type:      "translate",
+      });
+    }
+
+    // Merge results preserving original field order
+    const allResults = [...batchResults, ...htmlResults];
+    const parseFailed = allResults.filter((r) => r.error === "parse_failed");
+    if (parseFailed.length > 0) {
+      logAppEvent({
+        shop_domain: shopDomain,
+        action:      "translate_error",
+        status:      "warn",
+        message:     `Translation parse failed for ${parseFailed.length} field(s) — source text used as fallback`,
+        metadata:    { model: requestModel, failed_keys: parseFailed.map((r) => r.key) },
+      });
+    }
+
+    const resultMap = new Map<string, string>();
+    for (const r of allResults) resultMap.set(r.key, r.translation);
+
+    const results: TranslateResponseField[] = toTranslate.map((f) => ({
+      key: f.key,
+      translation: resultMap.get(f.key) ?? "",
+    }));
+
+    return NextResponse.json({ fields: results });
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : "";
+
+    if (raw.includes("429") || raw.toLowerCase().includes("rate limit")) {
+      logAppEvent({
+        shop_domain: shopDomain,
+        action:      "translate_error",
+        status:      "warn",
+        message:     `OpenAI rate limit hit`,
+        metadata:    { model: requestModel },
+      });
+      return NextResponse.json(
+        {
+          error:
+            "You've hit the OpenAI translation limit for this minute (too many words sent at once). " +
+            "Wait about 60 seconds, then try again. " +
+            "If this keeps happening, go to Settings and switch to GPT-4o mini — it has a much higher limit and is faster for bulk work.",
+        },
+        { status: 429 }
+      );
+    }
+
+    logAppEvent({
+      shop_domain: shopDomain,
+      action:      "translate_error",
+      status:      "error",
+      message:     `Translation failed: ${raw || "unknown error"}`,
+      metadata:    { model: requestModel },
+    });
+    const message = raw || "Translation failed — please try again.";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

@@ -23,12 +23,12 @@ const TYPE_TO_GID: Record<string, string> = {
   SHOP:                       "Shop",
   SHOP_POLICY:                "ShopPolicy",
   METAFIELD:                  "Metafield",
-  // Shopify GIDs are gid://shopify/Metaobject/XXX (lowercase 'o')
+  // Shopify GIDs use gid://shopify/Metaobject/XXX (lowercase 'o')
   METAOBJECT:                 "Metaobject",
   EMAIL_TEMPLATE:             "EmailTemplate",
   FILTER:                     "Filter",
   MENU:                       "Menu",
-  LINK:                       "Link",
+  LINK:                       "Link",   // individual navigation links (menu items)
   ONLINE_STORE_MENU:          "Menu",
   ONLINE_STORE_THEME:         "OnlineStoreTheme",
   PACKING_SLIP_TEMPLATE:      "PackingSlipTemplate",

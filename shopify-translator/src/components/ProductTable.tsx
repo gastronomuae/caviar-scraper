@@ -1,1 +1,1394 @@
-﻿"use client";import { useState, useMemo, useEffect, useCallback, memo, useRef } from "react";import { TranslationRecord } from "@/types";import ProductRow from "./ProductRow";import SyncToolbar from "./SyncToolbar";import HighlightText from "./HighlightText";import { formatLastSyncedRelative } from "@/utils/lastSyncAt";export type StatusFilter = "all" | "new" | "outdated" | "partial" | "translated";// ΓöÇΓöÇ Universal field search helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇexport interface FieldMatch {  /** Human-readable field label, e.g. "Body", "SEO Title" */  fieldLabel: string;  /** Which side of the translation matched */  side: "ru" | "en";  /** Short plain-text snippet with ~45 chars of context around the match */  snippet: string;}const FIELD_LABEL_MAP: Record<string, string> = {  body_html:        "Body",  meta_title:       "SEO Title",  meta_description: "SEO Description",  product_type:     "Product Type",  description:      "Description",  content:          "Content",};const TYPE_LABEL_MAP: Record<string, string> = {  PRODUCT:                    "Product",  COLLECTION:                 "Collection",  PRODUCT_VARIANT:            "Product variant",  PRODUCT_OPTION:             "Product option",  PRODUCT_OPTION_VALUE:       "Option value",  // Canonical 2025-07 names  PAGE:                       "Page",  ARTICLE:                    "Article",  BLOG:                       "Blog",  // Legacy aliases (for records stored before the rename)  ONLINE_STORE_PAGE:          "Page",  ONLINE_STORE_ARTICLE:       "Article",  ONLINE_STORE_BLOG:          "Blog",  ONLINE_STORE_THEME:         "Theme",  MENU:                       "Menu",  LINK:                       "Menu item",  ONLINE_STORE_MENU:          "Menu",  SHOP:                       "Shop",  SHOP_POLICY:                "Shop policy",  DELIVERY_METHOD_DEFINITION: "Delivery method",  EMAIL_TEMPLATE:             "Email template",  // SMS_TEMPLATE / SHOP_SMS_TEMPLATE both invalid on 2025-07 ΓÇö removed  PAYMENT_GATEWAY:            "Payment gateway",  PACKING_SLIP_TEMPLATE:      "Packing slip",  SELLING_PLAN:               "Selling plan",  SELLING_PLAN_GROUP:         "Selling plan group",  FILTER:                     "Filter",  METAOBJECT:                 "Metaobject",  METAFIELD:                  "Metafield",};function humanTypeLabel(type: string): string {  return TYPE_LABEL_MAP[type] ?? type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());}function isOptionType(type: string): boolean {  return type === "PRODUCT_OPTION" || type === "PRODUCT_OPTION_VALUE";}/** * Stable content fingerprint used to group PRODUCT_OPTION / PRODUCT_OPTION_VALUE * records that share identical source text (same digest). * Including the resource type so "Volume" (option) and "Volume" (value) stay separate. */function optionFingerprint(record: TranslationRecord): string {  return (    record.type +    "||" +    record.fields      .map((f) => `${f.field}:${f.ru_content}`)      .sort()      .join("|")  );}function metafieldGroupKey(record: TranslationRecord): string {  const f =    record.fields.find((x) => x.parentType || x.parentTitle) ??    record.fields.find((x) => x.displayName || x.namespaceKey) ??    record.fields[0];  const pt = (f?.parentType ?? "RESOURCE").trim() || "RESOURCE";  const tt = (f?.parentTitle ?? record.handle).trim() || record.handle;  return `${pt}ΓÇ║${tt}`;}function humanFieldLabel(key: string): string {  return (    FIELD_LABEL_MAP[key] ??    key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())  );}/** Returns a short plain-text snippet with context around the first match. */function buildSnippet(rawContent: string, query: string, ctx = 32): string {  // Try match in stripped plain text first (better for display)  const plain = rawContent.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();  let idx = plain.toLowerCase().indexOf(query);  if (idx !== -1) {    const s = Math.max(0, idx - ctx);    const e = Math.min(plain.length, idx + query.length + ctx);    return (s > 0 ? "ΓÇª" : "") + plain.slice(s, e) + (e < plain.length ? "ΓÇª" : "");  }  // Fallback: match in raw HTML (e.g. query contains "<p>[short_description]")  idx = rawContent.toLowerCase().indexOf(query);  if (idx !== -1) {    const s = Math.max(0, idx - ctx);    const e = Math.min(rawContent.length, idx + query.length + ctx);    return (s > 0 ? "ΓÇª" : "") + rawContent.slice(s, e) + (e < rawContent.length ? "ΓÇª" : "");  }  return "";}/** * Searches all non-title fields of a record for `q` (raw substring, case-insensitive). * Returns the first field match with a snippet, or null if nothing found. */function findFieldMatch(record: TranslationRecord, q: string): FieldMatch | null {  for (const f of record.fields) {    if (f.field === "title" || f.field === "name") continue; // already shown in title row    const ru  = f.ru_content ?? "";    const en  = f.en_content ?? "";    if (ru.toLowerCase().includes(q)) {      return { fieldLabel: f.displayName?.trim() || humanFieldLabel(f.field), side: "ru", snippet: buildSnippet(ru, q) };    }    if (en.toLowerCase().includes(q)) {      return { fieldLabel: f.displayName?.trim() || humanFieldLabel(f.field), side: "en", snippet: buildSnippet(en, q) };    }  }  return null;}// ΓöÇΓöÇ Find & Replace helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇinterface ReplaceMatch {  recordId: string;  title: string;  resourceType: string;  fieldLabel: string;  side: "ru" | "en";  replacements: number;  beforeSnippet: string;  afterSnippet: string;}function countOccurrencesExact(text: string, needle: string): number {  if (!needle) return 0;  let count = 0;  let idx = 0;  while (true) {    idx = text.indexOf(needle, idx);    if (idx === -1) break;    count += 1;    idx += needle.length;  }  return count;}function countOccurrencesInsensitive(text: string, needle: string): number {  if (!needle) return 0;  const hay = text.toLowerCase();  const ndl = needle.toLowerCase();  let count = 0;  let idx = 0;  while (true) {    idx = hay.indexOf(ndl, idx);    if (idx === -1) break;    count += 1;    idx += ndl.length;  }  return count;}function replaceAllInsensitive(text: string, needle: string, replacement: string): string {  if (!needle) return text;  const hay = text.toLowerCase();  const ndl = needle.toLowerCase();  let out = "";  let cursor = 0;  while (true) {    const hit = hay.indexOf(ndl, cursor);    if (hit === -1) {      out += text.slice(cursor);      break;    }    out += text.slice(cursor, hit) + replacement;    cursor = hit + needle.length;  }  return out;}/** Snippet built from content after replacement, centred on the first replaced term. */function buildAfterSnippet(rawContent: string, find: string, replace: string, ctx = 32): string {  const replaced = replaceAllInsensitive(rawContent, find, replace);  const plain = replaced.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();  const needle = replace || find;  const idx = plain.toLowerCase().indexOf(needle.toLowerCase());  if (idx === -1) return plain.slice(0, ctx * 2);  const s = Math.max(0, idx - ctx);  const e = Math.min(plain.length, idx + needle.length + ctx);  return (s > 0 ? "ΓÇª" : "") + plain.slice(s, e) + (e < plain.length ? "ΓÇª" : "");}/** Returns every (record, field, side) tuple that contains `find` (case-sensitive). */function computeReplaceMatches(  records: TranslationRecord[],  find: string,  replace: string): ReplaceMatch[] {  if (!find) return [];  const matches: ReplaceMatch[] = [];  outer: for (const record of records) {    const title =      record.fields.find((f) => f.field === "title" || f.field === "name")?.ru_content ??      record.handle;    for (const f of record.fields) {      const ru = f.ru_content ?? "";      const en = f.en_content ?? "";      if (ru.toLowerCase().includes(find.toLowerCase())) {        const replacements = countOccurrencesInsensitive(ru, find);        matches.push({          recordId: record.id, title, resourceType: record.type,          fieldLabel: f.displayName?.trim() || humanFieldLabel(f.field), side: "ru",          replacements,          beforeSnippet: buildSnippet(ru, find.toLowerCase()),          afterSnippet:  buildAfterSnippet(ru, find, replace),        });      }      if (en.toLowerCase().includes(find.toLowerCase())) {        const replacements = countOccurrencesInsensitive(en, find);        matches.push({          recordId: record.id, title, resourceType: record.type,          fieldLabel: f.displayName?.trim() || humanFieldLabel(f.field), side: "en",          replacements,          beforeSnippet: buildSnippet(en, find.toLowerCase()),          afterSnippet:  buildAfterSnippet(en, find, replace),        });      }      if (matches.length >= 200) break outer;    }  }  return matches;}export interface TableFilterState {  typeFilter: string;  statusFilter: StatusFilter;  localeFilter: string;  search: string;  currentPage: number;  /** When true, list only records pushed to Shopify this browser session. */  pushedToShopifyOnly: boolean;}interface ProductTableProps {  records: TranslationRecord[];  onOpenEditor: (id: string) => void;  onTranslate: (id: string) => void;  onTranslateSelected: (ids: string[], forceRetranslate?: boolean) => void | Promise<void>;  onPushSelected: (ids: string[]) => void | Promise<void>;  onInlineFieldChange: (recordId: string, fieldKey: string, value: string) => void;  onInlineSaveRow: (recordId: string) => void;  onInlineTranslateRow: (recordId: string) => void;  onPushRow: (id: string) => void | Promise<void>;  pushingRowId: string | null;  isTranslatingAny: boolean;  /** True only while "Translate selected" loop is running. */  isTranslatingBulk?: boolean;  isPushingBulk: boolean;  /** Increment after bulk push (or similar) to clear row selection */  selectionResetKey: number;  /** IDs pushed to Shopify this session (for Not pushed / Pushed row badges) */  sessionPushedIds: Set<string>;  filterState: TableFilterState;  onFilterChange: (state: TableFilterState) => void;  /** Row highlighted when editor is open for that record */  activeRowId?: string | null;  /** Shopify sync (toolbar) */  onSyncFromShopify?: (opts?: { force?: boolean }) => void;  /** Replace all occurrences of `find` with `replace` across all records; returns updated item count. */  onReplaceAll?: (find: string, replace: string, targetIds?: string[]) => number;  /** True while CSV parse/upload or Shopify API sync is in progress (disables Sync). */  isUploading?: boolean;  isShopifySyncing?: boolean;  syncProgressPct?: number | null;  lastSyncAt?: string | null;  lastSyncLabels?: string[] | null;}const PAGE_SIZE = 50;function ProductTable({  records,  onOpenEditor,  onTranslate,  onTranslateSelected,  onPushSelected,  onInlineFieldChange,  onInlineSaveRow,  onInlineTranslateRow,  onPushRow,  pushingRowId,  isTranslatingAny,  isTranslatingBulk = false,  isPushingBulk,  selectionResetKey,  sessionPushedIds,  filterState,  onFilterChange,  activeRowId,  onSyncFromShopify,  isUploading,  isShopifySyncing,  syncProgressPct,  lastSyncAt,  lastSyncLabels,  onReplaceAll,}: ProductTableProps) {  const { typeFilter, statusFilter, localeFilter, search, currentPage, pushedToShopifyOnly } =    filterState;  function setTypeFilter(v: string)         { onFilterChange({ ...filterState, typeFilter: v,    currentPage: 1 }); }  function setStatusFilter(v: StatusFilter) { onFilterChange({ ...filterState, statusFilter: v,  currentPage: 1 }); }  function setLocaleFilter(v: string)       { onFilterChange({ ...filterState, localeFilter: v,  currentPage: 1 }); }  function setSearch(v: string)             { onFilterChange({ ...filterState, search: v,         currentPage: 1 }); }  function setPushedToShopifyOnly(v: boolean) {    onFilterChange({ ...filterState, pushedToShopifyOnly: v, currentPage: 1 });  }  const [selectedIds, setSelectedIds]     = useState<Set<string>>(() => new Set());  // ΓöÇΓöÇ Find & Replace state ΓöÇΓöÇ  const [showReplace, setShowReplace]     = useState(false);  const [replaceText, setReplaceText]     = useState("");  const [showPreview, setShowPreview]     = useState(false);  const [appliedCount, setAppliedCount]   = useState<number | null>(null);  const replaceInputRef                   = useRef<HTMLInputElement>(null);  const isPushJobRunning = isPushingBulk || pushingRowId !== null;  const isResultsLocked = isTranslatingBulk || isPushJobRunning;  const lockMessage = isPushJobRunning ? "Pushing to ShopifyΓÇª" : "Bulk translation in progressΓÇª";  // Metaobject entries and resource-owned metafields are always shown inline  // inside their parent editor ΓÇö never as standalone top-level rows.  // LINK records (individual menu items) are shown inside MenuEditor ΓÇö not in the flat list.  const baseRecords = useMemo(    () =>      records.filter((r) => {        if (r.type === "METAOBJECT" || r.type === "METAFIELD") return false;        if (r.type === "LINK") return false;        return true;      }),    [records]  );  // Count how many LINK records belong to each MENU (by parentMenuId).  const menuItemCounts = useMemo(() => {    const counts = new Map<string, number>();    for (const r of records) {      if (r.type === "LINK" && r.parentMenuId) {        counts.set(r.parentMenuId, (counts.get(r.parentMenuId) ?? 0) + 1);      }    }    return counts;  }, [records]);  // Drop stale selection ids if records reload  useEffect(() => {    const valid = new Set(baseRecords.map((r) => r.id));    setSelectedIds((prev) => {      let changed = false;      const next = new Set<string>();      for (const id of prev) {        if (valid.has(id)) next.add(id);        else changed = true;      }      return changed ? next : prev;    });  }, [baseRecords]);  useEffect(() => {    setSelectedIds(new Set());  }, [selectionResetKey]);  const toggleSelect = useCallback((id: string) => {    setSelectedIds((prev) => {      const next = new Set(prev);      if (next.has(id)) next.delete(id);      else next.add(id);      return next;    });  }, []);  // Available filter values  const typeCounts = useMemo(() => {    const counts = new Map<string, number>();    for (const r of baseRecords) {      counts.set(r.type, (counts.get(r.type) ?? 0) + 1);    }    return counts;  }, [baseRecords]);  // METAFIELD and METAOBJECT are nested under parent editors ΓÇö they never appear  // as standalone top-level rows, so exclude them from filter chips.  const NESTED_FILTER_TYPES = new Set(["METAFIELD", "METAOBJECT"]);  // Virtual filter type that groups PRODUCT_OPTION + PRODUCT_OPTION_VALUE into one pill.  const PRODUCT_OPTIONS_VIRTUAL = "PRODUCT_OPTION||PRODUCT_OPTION_VALUE";  const availableTypes = useMemo(() => {    const rawTypes = [...typeCounts.keys()].filter((t) => !NESTED_FILTER_TYPES.has(t));    const hasOpt   = rawTypes.includes("PRODUCT_OPTION");    const hasVal   = rawTypes.includes("PRODUCT_OPTION_VALUE");    const types: string[] = rawTypes      .filter((t) => t !== "PRODUCT_OPTION" && t !== "PRODUCT_OPTION_VALUE")      .sort((a, b) => (typeCounts.get(b) ?? 0) - (typeCounts.get(a) ?? 0));    // Insert the virtual "Options & values" pill right after PRODUCT (if present)    if (hasOpt || hasVal) {      const productIdx = types.indexOf("PRODUCT");      types.splice(productIdx === -1 ? 0 : productIdx + 1, 0, PRODUCT_OPTIONS_VIRTUAL);    }    return types;  }, [typeCounts]); // eslint-disable-line react-hooks/exhaustive-deps  const availableLocales = useMemo(    () => Array.from(new Set(baseRecords.map((r) => r.locale).filter(Boolean))).sort(),    [baseRecords]  );  function matchesTypeFilter(rType: string, filter: string): boolean {    if (filter === "all") return true;    if (filter === PRODUCT_OPTIONS_VIRTUAL) return rType === "PRODUCT_OPTION" || rType === "PRODUCT_OPTION_VALUE";    return rType === filter;  }  const pushCountBase = useMemo(    () => (typeFilter === "all" ? baseRecords : baseRecords.filter((r) => matchesTypeFilter(r.type, typeFilter))),    [baseRecords, typeFilter] // eslint-disable-line react-hooks/exhaustive-deps  );  const pushCounts = useMemo(() => {    let pushed = 0;    for (const r of pushCountBase) {      if (sessionPushedIds.has(r.id)) pushed++;    }    return {      all: pushCountBase.length,      pushed,      notPushed: pushCountBase.length - pushed,    };  }, [pushCountBase, sessionPushedIds]);  // Apply all filters + sort; build field-match snippet map for non-title matches  const { filtered, matchSnippetMap } = useMemo(() => {    const q = search.trim().toLowerCase();    const snippetMap = new Map<string, FieldMatch>();    const result = baseRecords.filter((r) => {      if (!matchesTypeFilter(r.type, typeFilter)) return false;      if (statusFilter !== "all" && r.status !== statusFilter) return false;      if (localeFilter !== "all" && r.locale !== localeFilter) return false;      if (q) {        const titleField   = r.fields.find((f) => f.field === "title" || f.field === "name");        const matchHandle  = r.handle.toLowerCase().includes(q);        const matchRuTitle = (titleField?.ru_content ?? "").toLowerCase().includes(q);        const matchEnTitle = (titleField?.en_content ?? "").toLowerCase().includes(q);        const matchId      = r.identification.toLowerCase().includes(q);        // Universal field search ΓÇö all fields including body_html, SEO, metafields, raw HTML        const fieldMatch   = (!matchHandle && !matchRuTitle && !matchEnTitle && !matchId)          ? findFieldMatch(r, q)          : null;        if (!matchHandle && !matchRuTitle && !matchEnTitle && !matchId && !fieldMatch) return false;        // Store snippet for display ΓÇö only for non-title matches        if (fieldMatch && !matchRuTitle && !matchEnTitle) {          snippetMap.set(r.id, fieldMatch);        }      }      const pushed = sessionPushedIds.has(r.id);      if (pushedToShopifyOnly && !pushed) return false;      return true;    });    // Recently translated first (newest first); tie-break for stable order when timestamps match    const sorted = [...result].sort((a, b) => {      const ta = a.translatedAt ?? 0;      const tb = b.translatedAt ?? 0;      if (tb !== ta) return tb - ta;      return b.id.localeCompare(a.id);    });    return { filtered: sorted, matchSnippetMap: snippetMap };  }, [baseRecords, typeFilter, statusFilter, localeFilter, search, pushedToShopifyOnly, sessionPushedIds]);  // Unique / total count for the "Options & values" pill and subtitle.  // Derived from ALL base records so the pill count is stable regardless of status/search filters.  const { optionsUniqueCount, optionsTotalCount } = useMemo(() => {    const optionRecords = baseRecords.filter((r) => isOptionType(r.type));    const seen = new Set(optionRecords.map(optionFingerprint));    return { optionsUniqueCount: seen.size, optionsTotalCount: optionRecords.length };  }, [baseRecords]);  // When the "Options & values" filter is active, collapse identical source strings  // into one representative row (display-only dedup ΓÇö DB records unchanged).  // sharedCountMap: representative record.id ΓåÆ total # of base records sharing that fingerprint.  const { displayRecords, sharedCountMap } = useMemo(() => {    if (typeFilter !== PRODUCT_OPTIONS_VIRTUAL) {      return { displayRecords: filtered, sharedCountMap: new Map<string, number>() };    }    // Count all option base records per fingerprint (full count, not filter-limited)    const allFpCount = new Map<string, number>();    for (const r of baseRecords) {      if (!isOptionType(r.type)) continue;      const fp = optionFingerprint(r);      allFpCount.set(fp, (allFpCount.get(fp) ?? 0) + 1);    }    // Pick the first (most-recently-translated) representative per fingerprint from filtered    const seenFp = new Map<string, TranslationRecord>();    for (const r of filtered) {      const fp = optionFingerprint(r);      if (!seenFp.has(fp)) seenFp.set(fp, r);    }    const deduped = [...seenFp.values()];    const countMap = new Map<string, number>(      deduped.map((r) => [r.id, allFpCount.get(optionFingerprint(r)) ?? 1])    );    return { displayRecords: deduped, sharedCountMap: countMap };  }, [typeFilter, filtered, baseRecords]); // eslint-disable-line react-hooks/exhaustive-deps  // Replace matches ΓÇö only computed when replace mode is open and find is non-empty  const replaceBaseRecords = useMemo(    () => (selectedIds.size > 0 ? baseRecords.filter((r) => selectedIds.has(r.id)) : baseRecords),    [baseRecords, selectedIds]  );  const replaceMatches = useMemo(    () => (showReplace && search.trim() ? computeReplaceMatches(replaceBaseRecords, search.trim(), replaceText) : []),    [showReplace, search, replaceText, replaceBaseRecords]  );  const totalReplacementCount = useMemo(    () => replaceMatches.reduce((sum, m) => sum + m.replacements, 0),    [replaceMatches]  );  const matchedItemCount = useMemo(    () => new Set(replaceMatches.map((m) => m.recordId)).size,    [replaceMatches]  );  // Auto-focus replace input when it becomes visible on mobile  useEffect(() => {    if (showReplace) {      setTimeout(() => replaceInputRef.current?.focus(), 50);    }  }, [showReplace]);  function handleApplyReplace() {    const find = search.trim();    if (!find || !onReplaceAll) return;    const targetIds = selectedIds.size > 0 ? [...selectedIds] : undefined;    const count = onReplaceAll(find, replaceText, targetIds);    setAppliedCount(count);    setShowPreview(false);  }  // Pagination ΓÇö based on displayRecords (deduped for Options & values, plain otherwise)  const totalPages = useMemo(    () => Math.max(1, Math.ceil(displayRecords.length / PAGE_SIZE)),    [displayRecords.length]  );  const safePage = useMemo(() => Math.min(currentPage, totalPages), [currentPage, totalPages]);  const pageStart = useMemo(() => (safePage - 1) * PAGE_SIZE, [safePage]);  const paginated = useMemo(    () => displayRecords.slice(pageStart, pageStart + PAGE_SIZE),    [displayRecords, pageStart]  );  const paginatedForRender = useMemo(() => {    if (typeFilter !== "METAFIELD") return paginated;    return [...paginated].sort((a, b) => {      const ga = metafieldGroupKey(a);      const gb = metafieldGroupKey(b);      if (ga !== gb) return ga.localeCompare(gb);      return a.id.localeCompare(b.id);    });  }, [paginated, typeFilter]);  const selectedCount = selectedIds.size;  const allFullyTranslated =    selectedCount > 0 &&    records.filter((r) => selectedIds.has(r.id)).every((r) => r.status === "translated");  const pageIds = useMemo(() => paginatedForRender.map((r) => r.id), [paginatedForRender]);  const allOnPageSelected =    pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));  const someOnPageSelected = pageIds.some((id) => selectedIds.has(id));  const toggleSelectAllOnPage = useCallback(() => {    setSelectedIds((prev) => {      const next = new Set(prev);      if (allOnPageSelected) {        for (const id of pageIds) next.delete(id);      } else {        for (const id of pageIds) next.add(id);      }      return next;    });  }, [allOnPageSelected, pageIds]);  const selectAllFiltered = useCallback(() => {    setSelectedIds(new Set(displayRecords.map((r) => r.id)));  }, [displayRecords]);  const goToPage = useCallback(    (page: number) => {      const clamped = Math.max(1, Math.min(page, totalPages));      onFilterChange({ ...filterState, currentPage: clamped });      const scrollEl = document.getElementById("shopify-translator-list-scroll");      if (scrollEl) scrollEl.scrollTo({ top: 0, behavior: "smooth" });    },    [totalPages, filterState, onFilterChange]  );  return (    <div className="space-y-4">      {/* Sticky: stats + filters + ΓÇ£Select allΓÇ¥ stay visible while scrolling the list */}      <div className="sticky top-0 z-10 space-y-4 bg-slate-50 pb-2 shadow-[0_6px_8px_-4px_rgba(15,23,42,0.06)]">      {/* ΓöÇΓöÇ Toolbar ΓöÇΓöÇ */}      <div className="bg-white border border-gray-200 rounded-xl shadow-sm">        {/* Top bar: stats + actions            Mobile:  flex-col ΓÇö [SyncΓû╝ EN] / last synced / [Translate] [Publish]            Desktop: flex-row ΓÇö left group (Sync+stat+lastsynced) | right group (buttons)        */}        <div className="flex flex-col gap-2 px-4 py-3 md:flex-row md:flex-nowrap md:items-center md:justify-between md:gap-3 md:px-5 border-b border-gray-100">          {/* ΓöÇΓöÇ LEFT / TOP group ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */}          <div className="flex flex-col md:flex-row md:items-center md:gap-2 min-w-0">            {/* Row: SyncΓû╝ + EN (+ stat text and last synced on desktop) */}            <div className="flex items-center gap-2 min-w-0">              {onSyncFromShopify && (                <div className="shrink-0">                  <SyncToolbar                    onSync={onSyncFromShopify}                    disabled={Boolean(isUploading)}                    isSyncing={Boolean(isShopifySyncing)}                    syncProgressPct={syncProgressPct ?? null}                    lastSyncAt={lastSyncAt ?? null}                    lastSyncLabels={lastSyncLabels ?? null}                    showLastSynced={false}                  />                </div>              )}              {/* Last synced ΓÇö desktop inline */}              {onSyncFromShopify && lastSyncAt != null && (                <span className="hidden md:inline text-xs text-gray-400 tabular-nums">                  ┬╖ Last synced: {formatLastSyncedRelative(lastSyncAt)}                  {lastSyncLabels != null && lastSyncLabels.length > 0 ? ` ┬╖ ${lastSyncLabels.join(", ")}` : ""}                </span>              )}            </div>            {/* Last synced ΓÇö mobile only, below sync row */}            {onSyncFromShopify && lastSyncAt != null && (              <p className="md:hidden text-xs text-gray-500 tabular-nums mt-2 md:mt-1">                Last synced: {formatLastSyncedRelative(lastSyncAt)}                {lastSyncLabels != null && lastSyncLabels.length > 0 ? ` ┬╖ ${lastSyncLabels.join(", ")}` : ""}              </p>            )}          </div>          {/* ΓöÇΓöÇ Action buttons ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */}          <div className="flex items-center gap-2">            <button              type="button"              onClick={() => void onTranslateSelected([...selectedIds], allFullyTranslated)}              disabled={isTranslatingAny || isPushingBulk || selectedCount === 0}              title={allFullyTranslated ? "This will overwrite existing translations" : undefined}              className={`flex flex-1 md:flex-none items-center justify-center px-4 py-2.5 md:px-3 md:py-1.5 rounded-lg text-sm font-medium transition-all min-h-[40px] md:min-h-0                ${isTranslatingAny || isPushingBulk || selectedCount === 0                  ? "bg-gray-100 text-gray-400 cursor-not-allowed"                  : "bg-blue-600 text-white hover:bg-blue-700"                }`}            >              {isTranslatingAny ? "TranslatingΓÇª" : allFullyTranslated ? `Re-translate (${selectedCount})` : `Translate (${selectedCount})`}            </button>            <button              type="button"              onClick={() => void onPushSelected([...selectedIds])}              disabled={isTranslatingAny || isPushingBulk || selectedCount === 0}              className={`flex flex-1 md:flex-none items-center justify-center px-4 py-2.5 md:px-3 md:py-1.5 rounded-lg text-sm font-medium transition-all min-h-[40px] md:min-h-0                ${isTranslatingAny || isPushingBulk || selectedCount === 0                  ? "bg-gray-100 text-gray-400 cursor-not-allowed"                  : "bg-[#008060] text-white hover:bg-[#006e52]"                }`}            >              {isPushingBulk ? "PublishingΓÇª" : `Publish (${selectedCount})`}            </button>          </div>        </div>        {/* ΓöÇΓöÇ Search + Replace ΓÇö own section above filters ΓöÇΓöÇ */}        <div className="px-4 sm:px-5 pt-3 pb-2">          {/* Row 1: [ Search (flex-1) ] [ Replace toggle button ]              Always a single row on both mobile and desktop. */}          <div className="flex items-center gap-2">            <div className="relative flex-1 min-w-0 w-full max-w-full box-border">              <svg                className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"                fill="none" viewBox="0 0 24 24" stroke="currentColor"              >                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />              </svg>              <input                type="text"                value={search}                onChange={(e) => { setSearch(e.target.value); setAppliedCount(null); setShowPreview(false); }}                placeholder="Search all content, HTML, SEOΓÇª"                className="w-full max-w-full box-border pl-8 pr-8 py-2 text-sm bg-white border border-gray-300 rounded-lg outline-none focus:border-gray-400 transition-colors duration-150 placeholder-gray-300"              />              {search && (                <button                  onClick={() => { setSearch(""); setShowPreview(false); setAppliedCount(null); }}                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"                >                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />                  </svg>                </button>              )}            </div>            {/* Replace toggle button.                Mobile inactive:  icon + "Replace" label                Mobile active:    icon only (label hidden)                Desktop:          always icon + "Replace" label */}            <button              type="button"              title={showReplace ? "Close Find & Replace" : "Find & Replace"}              onClick={() => { setShowReplace((v) => !v); setShowPreview(false); setAppliedCount(null); }}              className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium transition-all duration-150 ${                showReplace                  ? "bg-gray-100 border-gray-300 text-gray-700"                  : "border-gray-200 text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50"              }`}            >              <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />              </svg>              {/* Hide label on mobile when replace is active (icon-only saves space) */}              <span className={showReplace ? "hidden md:inline" : undefined}>Replace</span>            </button>          </div>          {/* Replace panel ΓÇö slides in below Row 1.              ΓöîΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÉ              Γöé Mobile layout:                                              Γöé              Γöé   Line A: [ Γçä icon-close ] [ replace input (flex-1) ]      Γöé              Γöé   Line B: [ Preview (flex-1) ] [ Apply (flex-1) ]           Γöé              Γö£ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöñ              Γöé Desktop layout (md+):                                       Γöé              Γöé   Line A: [ replace input (flex-1) ] [ Preview ] [ Apply ] Γöé              ΓööΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÿ */}          <div            className={`overflow-hidden transition-all duration-150 ease-in-out ${              showReplace ? "max-h-40 opacity-100 mt-2" : "max-h-0 opacity-0 pointer-events-none"            }`}          >            {/* ΓöÇΓöÇ Mobile layout (< md) ΓöÇΓöÇ */}            <div className="md:hidden flex flex-col gap-2">              {/* Line A: icon-only close toggle + replace input */}              <div className="flex items-center gap-2">                <button                  type="button"                  title="Close Find & Replace"                  onClick={() => { setShowReplace(false); setShowPreview(false); setAppliedCount(null); }}                  className="shrink-0 flex items-center justify-center w-9 h-9 rounded-lg border border-gray-300 bg-gray-100 text-gray-700 transition-all duration-150"                >                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />                  </svg>                </button>                <input                  ref={replaceInputRef}                  type="text"                  value={replaceText}                  onChange={(e) => { setReplaceText(e.target.value); setAppliedCount(null); setShowPreview(false); }}                  placeholder={search.trim() ? `Replace "${search.trim()}" withΓÇª` : "Enter replacement text"}                  className="flex-1 min-w-[120px] w-full max-w-full box-border px-3 py-2 text-sm bg-gray-50 border border-gray-300 rounded-lg outline-none focus:border-gray-400 transition-colors duration-150 placeholder-gray-400"                />              </div>              {/* Line B: Preview + Apply CTAs */}              <div className="flex items-center gap-2">                <button                  type="button"                  disabled={!search.trim() || !replaceText.trim() || replaceMatches.length === 0}                  onClick={() => setShowPreview((v) => !v)}                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors duration-150 whitespace-nowrap ${                    !search.trim() || !replaceText.trim() || replaceMatches.length === 0                      ? "border-gray-200 text-gray-400 opacity-50 cursor-not-allowed"                      : showPreview                        ? "bg-amber-100 border-amber-300 text-amber-800"                        : "bg-amber-500 border-amber-500 text-white hover:bg-amber-600 hover:border-amber-600"                  }`}                  title={totalReplacementCount > 0 ? `${totalReplacementCount} replacement${totalReplacementCount !== 1 ? "s" : ""} across ${matchedItemCount} item${matchedItemCount !== 1 ? "s" : ""}` : undefined}                >                  {showPreview                    ? "Preview active"                    : totalReplacementCount > 0                      ? `Preview (${totalReplacementCount} matches)`                      : "Preview"}                </button>                <button                  type="button"                  disabled={!search.trim() || !replaceText.trim() || replaceMatches.length === 0 || !onReplaceAll}                  onClick={handleApplyReplace}                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors duration-150 whitespace-nowrap ${                    !search.trim() || !replaceText.trim() || replaceMatches.length === 0 || !onReplaceAll                      ? "border-gray-200 text-gray-400 opacity-50 cursor-not-allowed"                      : showPreview                        ? "bg-gray-900 border-gray-900 text-white hover:bg-black"                        : "border-gray-300 text-gray-500 hover:border-gray-400 hover:text-gray-700"                  }`}                >                  Apply{matchedItemCount > 0 ? ` (${matchedItemCount} items)` : ""}                </button>                {appliedCount !== null && (                  <span className="shrink-0 text-xs text-emerald-600 font-medium whitespace-nowrap">                    Γ£ô {appliedCount} updated                  </span>                )}              </div>            </div>            {/* ΓöÇΓöÇ Desktop layout (md+) ΓÇö unchanged ΓöÇΓöÇ */}            <div className="hidden md:flex items-center gap-2 w-full max-w-full box-border">              <input                type="text"                value={replaceText}                onChange={(e) => { setReplaceText(e.target.value); setAppliedCount(null); setShowPreview(false); }}                placeholder={search.trim() ? `Replace "${search.trim()}" withΓÇª` : "Enter replacement text"}                className="flex-1 min-w-0 w-full max-w-full box-border pl-3 pr-3 py-2 text-sm bg-gray-50 border border-gray-300 rounded-lg outline-none focus:border-gray-400 transition-colors duration-150 placeholder-gray-400"              />              {/* Preview ΓÇö amber CTA before active, muted badge after */}              <button                type="button"                disabled={!search.trim() || !replaceText.trim() || replaceMatches.length === 0}                onClick={() => setShowPreview((v) => !v)}                className={`shrink-0 px-3 py-2 rounded-lg border text-sm font-medium transition-colors duration-150 whitespace-nowrap ${                  !search.trim() || !replaceText.trim() || replaceMatches.length === 0                    ? "border-gray-200 text-gray-400 opacity-50 cursor-not-allowed"                    : showPreview                      ? "bg-amber-100 border-amber-300 text-amber-800"                      : "bg-amber-500 border-amber-500 text-white hover:bg-amber-600 hover:border-amber-600"                }`}                title={totalReplacementCount > 0 ? `${totalReplacementCount} replacement${totalReplacementCount !== 1 ? "s" : ""} across ${matchedItemCount} item${matchedItemCount !== 1 ? "s" : ""}` : undefined}              >                {showPreview                  ? "Preview active"                  : totalReplacementCount > 0                    ? `Preview (${totalReplacementCount} matches)`                    : "Preview"}              </button>              {/* Apply ΓÇö muted until preview is open, then primary black */}              <button                type="button"                disabled={!search.trim() || !replaceText.trim() || replaceMatches.length === 0 || !onReplaceAll}                onClick={handleApplyReplace}                className={`shrink-0 px-3 py-2 rounded-lg border text-sm font-medium transition-colors duration-150 whitespace-nowrap ${                  !search.trim() || !replaceText.trim() || replaceMatches.length === 0 || !onReplaceAll                    ? "border-gray-200 text-gray-400 opacity-50 cursor-not-allowed"                    : showPreview                      ? "bg-gray-900 border-gray-900 text-white hover:bg-black"                      : "border-gray-300 text-gray-500 hover:border-gray-400 hover:text-gray-700"                }`}              >                Apply{matchedItemCount > 0 ? ` (${matchedItemCount} items)` : ""}              </button>              {appliedCount !== null && (                <span className="shrink-0 text-xs text-emerald-600 font-medium whitespace-nowrap">                  Γ£ô {appliedCount} updated                </span>              )}            </div>          </div>        </div>        {/* ΓöÇΓöÇ Filter bar: type chips ΓöÇΓöÇ */}        <div className="flex flex-wrap items-center gap-1.5 px-5 py-2.5 border-b border-gray-100">          <button            onClick={() => setTypeFilter("all")}            className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all              ${typeFilter === "all" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}          >            All <span className="opacity-60 ml-0.5">{baseRecords.length.toLocaleString()}</span>          </button>          {availableTypes.map((type) => {            const isVirtualOptions = type === PRODUCT_OPTIONS_VIRTUAL;            // For Options & values pill: show unique-digest count so merchants see "12" not "3,428"            const count = isVirtualOptions              ? optionsUniqueCount              : (typeCounts.get(type) ?? 0);            const active = typeFilter === type;            const label  = isVirtualOptions ? "Options & values" : humanTypeLabel(type);            return (              <button                type="button"                key={type}                onClick={() => setTypeFilter(type)}                title={                  isVirtualOptions && optionsTotalCount > 0                    ? `${optionsUniqueCount.toLocaleString()} unique values across ${optionsTotalCount.toLocaleString()} records`                    : undefined                }                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all                  ${active ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}              >                {label}{" "}                <span className="opacity-60 tabular-nums">{count.toLocaleString()}</span>              </button>            );          })}          {availableLocales.length > 1 && (            <div className="flex items-center gap-1">              <div className="w-px h-4 bg-gray-200 mx-0.5" />              <button                onClick={() => setLocaleFilter("all")}                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all                  ${localeFilter === "all" ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}              >                All locales              </button>              {availableLocales.map((loc) => (                <button                  key={loc}                  onClick={() => setLocaleFilter(loc)}                  className={`px-2.5 py-1 rounded-md text-xs font-mono font-medium transition-all                    ${localeFilter === loc ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}                >                  {loc}                </button>              ))}            </div>          )}        </div>        {/* ΓöÇΓöÇ Options & values dedup info bar ΓöÇΓöÇ */}        {typeFilter === PRODUCT_OPTIONS_VIRTUAL && optionsTotalCount > 0 && (          <div className="px-5 py-1.5 border-b border-blue-100 bg-blue-50/40 flex items-center gap-1.5">            <svg className="w-3.5 h-3.5 text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />            </svg>            <span className="text-[11px] text-blue-700">              Showing{" "}              <strong>{optionsUniqueCount.toLocaleString()} unique {optionsUniqueCount === 1 ? "value" : "values"}</strong>              {optionsTotalCount !== optionsUniqueCount && (                <> across <strong>{optionsTotalCount.toLocaleString()} records</strong> ΓÇö duplicates collapsed</>              )}            </span>          </div>        )}        {/* ΓöÇΓöÇ Status filter row: statuses (left) ┬╖ Pushed toggle (right) ΓöÇΓöÇ */}        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-2">          <div className="flex flex-wrap items-center gap-1.5 min-w-0">            {(["all", "new", "outdated", "partial", "translated"] as StatusFilter[]).map((s) => {              const base = baseRecords.filter((r) => matchesTypeFilter(r.type, typeFilter));              const count = s === "all" ? base.length : base.filter((r) => r.status === s).length;              const colors: Record<string, string> = {                all:        statusFilter === "all"        ? "bg-gray-900 text-white"        : "bg-gray-100 text-gray-600 hover:bg-gray-200",                new:        statusFilter === "new"        ? "bg-amber-500 text-white"       : "bg-amber-50 text-amber-700 hover:bg-amber-100",                outdated:   statusFilter === "outdated"   ? "bg-orange-500 text-white"      : "bg-orange-50 text-orange-700 hover:bg-orange-100",                partial:    statusFilter === "partial"    ? "bg-blue-500 text-white"        : "bg-blue-50 text-blue-700 hover:bg-blue-100",                translated: statusFilter === "translated" ? "bg-green-600 text-white"       : "bg-green-50 text-green-700 hover:bg-green-100",              };              return (                <button                  type="button"                  key={s}                  onClick={() => setStatusFilter(s)}                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all capitalize ${colors[s]}`}                >                  {s === "all" ? "All Statuses" : s} <span className="opacity-70 ml-0.5">{count}</span>                </button>              );            })}          </div>          <div className="flex flex-wrap items-center gap-2 shrink-0">            <label className="inline-flex items-center gap-2.5 cursor-pointer select-none">              <span className="text-xs font-medium text-gray-700">Pushed to Shopify</span>              <span className="relative inline-block h-6 w-11 shrink-0 align-middle">                <input                  type="checkbox"                  className="peer sr-only"                  checked={pushedToShopifyOnly}                  onChange={(e) => setPushedToShopifyOnly(e.target.checked)}                  aria-label="Show only records pushed to Shopify this session"                />                <span                  className="absolute inset-0 rounded-full border border-gray-200 bg-gray-200 transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400 peer-focus-visible:ring-offset-2 peer-checked:border-emerald-600 peer-checked:bg-emerald-600"                  aria-hidden                />                <span                  className="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ease-out peer-checked:translate-x-5"                  aria-hidden                />              </span>              <span className="text-[11px] text-gray-400 tabular-nums">                {pushCounts.pushed.toLocaleString()} pushed              </span>            </label>          </div>        </div>      </div>      <div className="relative">      {/* ΓöÇΓöÇ Find & Replace preview panel ΓöÇΓöÇ */}      {showReplace && showPreview && replaceMatches.length > 0 && (        <div className="border border-amber-200 rounded-xl bg-amber-50/60 overflow-hidden">          <div className="flex items-center justify-between px-4 py-2.5 border-b border-amber-200">            <div className="flex items-center gap-2">              <svg className="w-3.5 h-3.5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />              </svg>              <span className="text-xs font-semibold text-amber-800">                {matchedItemCount} item{matchedItemCount !== 1 ? "s" : ""} ┬╖ {replaceMatches.length} match{replaceMatches.length !== 1 ? "es" : ""} ┬╖ {totalReplacementCount} total replacement{totalReplacementCount !== 1 ? "s" : ""}{selectedIds.size > 0 ? ` ┬╖ selected ${selectedIds.size}` : ""} ΓÇö preview only              </span>            </div>            <button              type="button"              onClick={() => setShowPreview(false)}              className="text-xs text-amber-500 hover:text-amber-700 hover:underline"            >              Close            </button>          </div>          <div className="max-h-64 overflow-y-auto divide-y divide-amber-100">            {replaceMatches.slice(0, 50).map((m, i) => (              <div key={i} className="flex items-start gap-3 px-4 py-2.5 text-xs hover:bg-amber-50">                {/* Resource info */}                <div className="w-32 shrink-0">                  <p className="font-medium text-gray-800 truncate" title={m.title}>{m.title}</p>                  <span className="text-gray-400 font-mono">{m.resourceType}</span>                </div>                {/* Field badge */}                <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 font-medium mt-0.5">                  {m.fieldLabel}                  <span className="text-indigo-300">┬╖</span>                  {m.side === "ru" ? "RU" : "EN"}                </span>                {/* Before ΓåÆ after */}                <div className="flex-1 min-w-0">                  <div className="flex items-center gap-1.5 min-w-0">                    <p className="text-gray-500 truncate min-w-0">                      <span className="text-gray-400 mr-1">Before</span>                      <HighlightText text={m.beforeSnippet} query={search} />                    </p>                    <span className="text-gray-300 shrink-0">ΓåÆ</span>                    <p className="text-gray-700 truncate min-w-0">                      <span className="text-gray-400 mr-1">After</span>                      <HighlightText text={m.afterSnippet} query={replaceText} />                    </p>                    <span className="text-[10px] text-indigo-600 bg-indigo-50 border border-indigo-200 rounded px-1 py-0.5 shrink-0">                      ├ù{m.replacements}                    </span>                  </div>                </div>              </div>            ))}            {replaceMatches.length > 50 && (              <p className="text-xs text-gray-400 text-center py-2">                ΓÇª and {replaceMatches.length - 50} more matches not shown              </p>            )}          </div>        </div>      )}      {/* ΓöÇΓöÇ Results summary (sticky with toolbar) ΓöÇΓöÇ */}      {displayRecords.length > 0 && (        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-400 px-1">          <div className="flex flex-wrap items-center gap-3">            <span>              {search || statusFilter !== "all"                ? `${displayRecords.length.toLocaleString()} result${displayRecords.length !== 1 ? "s" : ""} found`                : `${displayRecords.length.toLocaleString()} records`}              {totalPages > 1 && (                <span className="ml-1">                  ┬╖ showing {pageStart + 1}ΓÇô{Math.min(pageStart + PAGE_SIZE, displayRecords.length)}                </span>              )}            </span>            {pageIds.length > 0 && (              <label className="flex items-center gap-1.5 text-gray-600 cursor-pointer select-none">                <span className="inline-flex items-center justify-center shrink-0 w-[1.05rem] h-[1.05rem]">                  <input                    type="checkbox"                    checked={allOnPageSelected}                    ref={(el) => {                      if (el) el.indeterminate = someOnPageSelected && !allOnPageSelected;                    }}                    onChange={toggleSelectAllOnPage}                    className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600"                  />                </span>                <span>Select all on this page</span>              </label>            )}            {allOnPageSelected && selectedCount < displayRecords.length && (              <button                type="button"                onClick={selectAllFiltered}                className="text-blue-600 hover:underline font-medium"                title="Select all records matching current filters"              >                Select all {displayRecords.length.toLocaleString()} matching this search              </button>            )}            {selectedCount === displayRecords.length && displayRecords.length > pageIds.length && (              <span className="text-blue-600 font-medium">                All {displayRecords.length.toLocaleString()} matching records are selected              </span>            )}            {selectedCount > 0 && (              <button                type="button"                onClick={() => setSelectedIds(new Set())}                className="text-blue-600 hover:underline font-medium"              >                Clear selection ({selectedCount})              </button>            )}          </div>          {search && (            <button type="button" onClick={() => setSearch("")} className="text-blue-500 hover:underline">              Clear search            </button>          )}        </div>      )}      </div>      {/* ΓöÇΓöÇ Record list ΓöÇΓöÇ */}      <div className="relative">      {displayRecords.length === 0 ? (        <div className="text-center py-16 text-gray-400">          <svg className="w-10 h-10 mx-auto mb-3 text-gray-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />          </svg>          <p className="font-medium">No records match your filters</p>          <button            type="button"            onClick={() =>              onFilterChange({                ...filterState,                typeFilter: "all",                statusFilter: "all",                pushedToShopifyOnly: false,                localeFilter: "all",                search: "",                currentPage: 1,              })            }            className="mt-3 text-sm text-blue-600 hover:underline"          >            Clear all filters          </button>        </div>      ) : (        <div          className="space-y-3"          key={`${typeFilter}|${statusFilter}|${localeFilter}|${pushedToShopifyOnly}|${search.trim()}`}        >          {paginatedForRender.map((record, i) => {            const prev = i > 0 ? paginatedForRender[i - 1] : null;            const currGroup = typeFilter === "METAFIELD" ? metafieldGroupKey(record) : null;            const prevGroup = typeFilter === "METAFIELD" && prev ? metafieldGroupKey(prev) : null;            const showGroupHeader = typeFilter === "METAFIELD" && currGroup !== prevGroup;            const [parentType, parentTitle] = currGroup ? currGroup.split("ΓÇ║") : ["", ""];            return (              <div key={record.id} className="space-y-1.5">                {showGroupHeader && (                  <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500 border-b border-gray-200">                    {parentType} &#8250; {parentTitle}                  </div>                )}                <ProductRow                  record={record}                  index={pageStart + i}                  searchQuery={search}                  matchSnippet={matchSnippetMap.get(record.id)}                  onOpenEditor={onOpenEditor}                  onTranslate={onTranslate}                  onPushRow={onPushRow}                  pushingRowId={pushingRowId}                  isPushingBulk={isPushingBulk}                  selected={selectedIds.has(record.id)}                  onToggleSelect={toggleSelect}                  pushedToShopify={sessionPushedIds.has(record.id)}                  activeRowId={activeRowId}                  onInlineFieldChange={onInlineFieldChange}                  onInlineSaveRow={onInlineSaveRow}                  onInlineTranslateRow={onInlineTranslateRow}                  menuItemCount={                    record.type === "MENU"                      ? (menuItemCounts.get(record.identification) ?? 0)                      : undefined                  }                  sharedCount={sharedCountMap.get(record.id)}                />              </div>            );          })}        </div>      )}      {/* ΓöÇΓöÇ Pagination ΓöÇΓöÇ */}      {totalPages > 1 && (        <Pagination          currentPage={safePage}          totalPages={totalPages}          totalItems={displayRecords.length}          pageSize={PAGE_SIZE}          onPageChange={goToPage}        />      )}      {isResultsLocked && (        <div className="absolute inset-0 z-20 bg-slate-50/70 backdrop-blur-[1px] flex items-start justify-center pt-8">          <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white/95 px-3 py-2 shadow-sm text-sm text-slate-700">            <BtnSpinner />            <span>{lockMessage}</span>          </div>        </div>      )}      </div>      </div>    </div>  );}export default memo(ProductTable);// ΓöÇΓöÇ Pagination component ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇfunction Pagination({  currentPage,  totalPages,  totalItems,  pageSize,  onPageChange,}: {  currentPage: number;  totalPages: number;  totalItems: number;  pageSize: number;  onPageChange: (page: number) => void;}) {  const pageList = useMemo((): (number | "ΓÇª")[] => {    if (totalPages <= 7) {      return Array.from({ length: totalPages }, (_, i) => i + 1);    }    const pages: (number | "ΓÇª")[] = [1];    if (currentPage > 3) pages.push("ΓÇª");    for (let p = Math.max(2, currentPage - 1); p <= Math.min(totalPages - 1, currentPage + 1); p++) {      pages.push(p);    }    if (currentPage < totalPages - 2) pages.push("ΓÇª");    pages.push(totalPages);    return pages;  }, [currentPage, totalPages]);  const from = (currentPage - 1) * pageSize + 1;  const to   = Math.min(currentPage * pageSize, totalItems);  return (    <div className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-5 py-3 shadow-sm">      <span className="text-xs text-gray-400 tabular-nums">        {from.toLocaleString()}ΓÇô{to.toLocaleString()} of {totalItems.toLocaleString()} records      </span>      <div className="flex items-center gap-1">        <PaginationBtn          onClick={() => onPageChange(currentPage - 1)}          disabled={currentPage === 1}          title="Previous page"        >          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />          </svg>        </PaginationBtn>        {pageList.map((p, i) =>          p === "ΓÇª" ? (            <span key={`ellipsis-${i}`} className="w-8 text-center text-xs text-gray-400 select-none">ΓÇª</span>          ) : (            <PaginationBtn              key={p}              onClick={() => onPageChange(p as number)}              active={p === currentPage}            >              {p}            </PaginationBtn>          )        )}        <PaginationBtn          onClick={() => onPageChange(currentPage + 1)}          disabled={currentPage === totalPages}          title="Next page"        >          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />          </svg>        </PaginationBtn>      </div>      {/* Jump to page */}      <div className="flex items-center gap-2 text-xs text-gray-400">        <span>Go to</span>        <input          type="number"          min={1}          max={totalPages}          defaultValue={currentPage}          key={currentPage}          onKeyDown={(e) => {            if (e.key === "Enter") {              const val = parseInt((e.target as HTMLInputElement).value, 10);              if (!isNaN(val)) onPageChange(val);            }          }}          className="w-12 px-2 py-1 border border-gray-200 rounded-md text-center focus:outline-none focus:ring-2 focus:ring-blue-400 text-gray-700"        />        <span className="text-gray-400">/ {totalPages}</span>      </div>    </div>  );}function PaginationBtn({  onClick,  disabled,  active,  title,  children,}: {  onClick: () => void;  disabled?: boolean;  active?: boolean;  title?: string;  children: React.ReactNode;}) {  return (    <button      onClick={onClick}      disabled={disabled}      title={title}      className={`w-8 h-8 flex items-center justify-center rounded-md text-sm transition-all        ${active          ? "bg-blue-600 text-white font-semibold"          : "text-gray-600 hover:bg-gray-100"        }        ${disabled ? "opacity-30 cursor-not-allowed" : "cursor-pointer"}`}    >      {children}    </button>  );}// ΓöÇΓöÇ Icon helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇfunction BtnSpinner() {  return (    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />    </svg>  );}
+"use client";
+
+import { useState, useMemo, useEffect, useCallback, memo, useRef } from "react";
+import { TranslationRecord } from "@/types";
+import ProductRow from "./ProductRow";
+import SyncToolbar from "./SyncToolbar";
+import HighlightText from "./HighlightText";
+import { formatLastSyncedRelative } from "@/utils/lastSyncAt";
+
+export type StatusFilter = "all" | "new" | "outdated" | "partial" | "translated";
+
+// ── Universal field search helpers ───────────────────────────────────────────
+
+export interface FieldMatch {
+  /** Human-readable field label, e.g. "Body", "SEO Title" */
+  fieldLabel: string;
+  /** Which side of the translation matched */
+  side: "ru" | "en";
+  /** Short plain-text snippet with ~45 chars of context around the match */
+  snippet: string;
+}
+
+const FIELD_LABEL_MAP: Record<string, string> = {
+  body_html:        "Body",
+  meta_title:       "SEO Title",
+  meta_description: "SEO Description",
+  product_type:     "Product Type",
+  description:      "Description",
+  content:          "Content",
+};
+
+const TYPE_LABEL_MAP: Record<string, string> = {
+  PRODUCT:                    "Product",
+  COLLECTION:                 "Collection",
+  PRODUCT_VARIANT:            "Product variant",
+  PRODUCT_OPTION:             "Product option",
+  PRODUCT_OPTION_VALUE:       "Option value",
+  // Canonical 2025-07 names
+  PAGE:                       "Page",
+  ARTICLE:                    "Article",
+  BLOG:                       "Blog",
+  // Legacy aliases (for records stored before the rename)
+  ONLINE_STORE_PAGE:          "Page",
+  ONLINE_STORE_ARTICLE:       "Article",
+  ONLINE_STORE_BLOG:          "Blog",
+  ONLINE_STORE_THEME:         "Theme",
+  MENU:                       "Menu",
+  LINK:                       "Menu item",
+  ONLINE_STORE_MENU:          "Menu",
+  SHOP:                       "Shop",
+  SHOP_POLICY:                "Shop policy",
+  DELIVERY_METHOD_DEFINITION: "Delivery method",
+  EMAIL_TEMPLATE:             "Email template",
+  // SMS_TEMPLATE / SHOP_SMS_TEMPLATE both invalid on 2025-07 — removed
+  PAYMENT_GATEWAY:            "Payment gateway",
+  PACKING_SLIP_TEMPLATE:      "Packing slip",
+  SELLING_PLAN:               "Selling plan",
+  SELLING_PLAN_GROUP:         "Selling plan group",
+  FILTER:                     "Filter",
+  METAOBJECT:                 "Metaobject",
+  METAFIELD:                  "Metafield",
+};
+
+function humanTypeLabel(type: string): string {
+  return TYPE_LABEL_MAP[type] ?? type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function isOptionType(type: string): boolean {
+  return type === "PRODUCT_OPTION" || type === "PRODUCT_OPTION_VALUE";
+}
+
+/**
+ * Stable content fingerprint used to group PRODUCT_OPTION / PRODUCT_OPTION_VALUE
+ * records that share identical source text (same digest).
+ * Including the resource type so "Volume" (option) and "Volume" (value) stay separate.
+ */
+function optionFingerprint(record: TranslationRecord): string {
+  return (
+    record.type +
+    "||" +
+    record.fields
+      .map((f) => `${f.field}:${f.ru_content}`)
+      .sort()
+      .join("|")
+  );
+}
+
+function metafieldGroupKey(record: TranslationRecord): string {
+  const f =
+    record.fields.find((x) => x.parentType || x.parentTitle) ??
+    record.fields.find((x) => x.displayName || x.namespaceKey) ??
+    record.fields[0];
+  const pt = (f?.parentType ?? "RESOURCE").trim() || "RESOURCE";
+  const tt = (f?.parentTitle ?? record.handle).trim() || record.handle;
+  return `${pt}›${tt}`;
+}
+
+function humanFieldLabel(key: string): string {
+  return (
+    FIELD_LABEL_MAP[key] ??
+    key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}
+
+/** Returns a short plain-text snippet with context around the first match. */
+function buildSnippet(rawContent: string, query: string, ctx = 32): string {
+  // Try match in stripped plain text first (better for display)
+  const plain = rawContent.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  let idx = plain.toLowerCase().indexOf(query);
+  if (idx !== -1) {
+    const s = Math.max(0, idx - ctx);
+    const e = Math.min(plain.length, idx + query.length + ctx);
+    return (s > 0 ? "…" : "") + plain.slice(s, e) + (e < plain.length ? "…" : "");
+  }
+  // Fallback: match in raw HTML (e.g. query contains "<p>[short_description]")
+  idx = rawContent.toLowerCase().indexOf(query);
+  if (idx !== -1) {
+    const s = Math.max(0, idx - ctx);
+    const e = Math.min(rawContent.length, idx + query.length + ctx);
+    return (s > 0 ? "…" : "") + rawContent.slice(s, e) + (e < rawContent.length ? "…" : "");
+  }
+  return "";
+}
+
+/**
+ * Searches all non-title fields of a record for `q` (raw substring, case-insensitive).
+ * Returns the first field match with a snippet, or null if nothing found.
+ */
+function findFieldMatch(record: TranslationRecord, q: string): FieldMatch | null {
+  for (const f of record.fields) {
+    if (f.field === "title" || f.field === "name") continue; // already shown in title row
+    const ru  = f.ru_content ?? "";
+    const en  = f.en_content ?? "";
+    if (ru.toLowerCase().includes(q)) {
+      return { fieldLabel: f.displayName?.trim() || humanFieldLabel(f.field), side: "ru", snippet: buildSnippet(ru, q) };
+    }
+    if (en.toLowerCase().includes(q)) {
+      return { fieldLabel: f.displayName?.trim() || humanFieldLabel(f.field), side: "en", snippet: buildSnippet(en, q) };
+    }
+  }
+  return null;
+}
+
+// ── Find & Replace helpers ───────────────────────────────────────────────────
+
+interface ReplaceMatch {
+  recordId: string;
+  title: string;
+  resourceType: string;
+  fieldLabel: string;
+  side: "ru" | "en";
+  replacements: number;
+  beforeSnippet: string;
+  afterSnippet: string;
+}
+
+function countOccurrencesExact(text: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let idx = 0;
+  while (true) {
+    idx = text.indexOf(needle, idx);
+    if (idx === -1) break;
+    count += 1;
+    idx += needle.length;
+  }
+  return count;
+}
+
+function countOccurrencesInsensitive(text: string, needle: string): number {
+  if (!needle) return 0;
+  const hay = text.toLowerCase();
+  const ndl = needle.toLowerCase();
+  let count = 0;
+  let idx = 0;
+  while (true) {
+    idx = hay.indexOf(ndl, idx);
+    if (idx === -1) break;
+    count += 1;
+    idx += ndl.length;
+  }
+  return count;
+}
+
+function replaceAllInsensitive(text: string, needle: string, replacement: string): string {
+  if (!needle) return text;
+  const hay = text.toLowerCase();
+  const ndl = needle.toLowerCase();
+  let out = "";
+  let cursor = 0;
+  while (true) {
+    const hit = hay.indexOf(ndl, cursor);
+    if (hit === -1) {
+      out += text.slice(cursor);
+      break;
+    }
+    out += text.slice(cursor, hit) + replacement;
+    cursor = hit + needle.length;
+  }
+  return out;
+}
+
+/** Snippet built from content after replacement, centred on the first replaced term. */
+function buildAfterSnippet(rawContent: string, find: string, replace: string, ctx = 32): string {
+  const replaced = replaceAllInsensitive(rawContent, find, replace);
+  const plain = replaced.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  const needle = replace || find;
+  const idx = plain.toLowerCase().indexOf(needle.toLowerCase());
+  if (idx === -1) return plain.slice(0, ctx * 2);
+  const s = Math.max(0, idx - ctx);
+  const e = Math.min(plain.length, idx + needle.length + ctx);
+  return (s > 0 ? "…" : "") + plain.slice(s, e) + (e < plain.length ? "…" : "");
+}
+
+/** Returns every (record, field, side) tuple that contains `find` (case-sensitive). */
+function computeReplaceMatches(
+  records: TranslationRecord[],
+  find: string,
+  replace: string
+): ReplaceMatch[] {
+  if (!find) return [];
+  const matches: ReplaceMatch[] = [];
+  outer: for (const record of records) {
+    const title =
+      record.fields.find((f) => f.field === "title" || f.field === "name")?.ru_content ??
+      record.handle;
+    for (const f of record.fields) {
+      const ru = f.ru_content ?? "";
+      const en = f.en_content ?? "";
+      if (ru.toLowerCase().includes(find.toLowerCase())) {
+        const replacements = countOccurrencesInsensitive(ru, find);
+        matches.push({
+          recordId: record.id, title, resourceType: record.type,
+          fieldLabel: f.displayName?.trim() || humanFieldLabel(f.field), side: "ru",
+          replacements,
+          beforeSnippet: buildSnippet(ru, find.toLowerCase()),
+          afterSnippet:  buildAfterSnippet(ru, find, replace),
+        });
+      }
+      if (en.toLowerCase().includes(find.toLowerCase())) {
+        const replacements = countOccurrencesInsensitive(en, find);
+        matches.push({
+          recordId: record.id, title, resourceType: record.type,
+          fieldLabel: f.displayName?.trim() || humanFieldLabel(f.field), side: "en",
+          replacements,
+          beforeSnippet: buildSnippet(en, find.toLowerCase()),
+          afterSnippet:  buildAfterSnippet(en, find, replace),
+        });
+      }
+      if (matches.length >= 200) break outer;
+    }
+  }
+  return matches;
+}
+
+export interface TableFilterState {
+  typeFilter: string;
+  statusFilter: StatusFilter;
+  localeFilter: string;
+  search: string;
+  currentPage: number;
+  /** When true, list only records pushed to Shopify this browser session. */
+  pushedToShopifyOnly: boolean;
+}
+
+interface ProductTableProps {
+  records: TranslationRecord[];
+  onOpenEditor: (id: string) => void;
+  onTranslate: (id: string) => void;
+  onTranslateSelected: (ids: string[], forceRetranslate?: boolean) => void | Promise<void>;
+  onPushSelected: (ids: string[]) => void | Promise<void>;
+  onInlineFieldChange: (recordId: string, fieldKey: string, value: string) => void;
+  onInlineSaveRow: (recordId: string) => void;
+  onInlineTranslateRow: (recordId: string) => void;
+  onPushRow: (id: string) => void | Promise<void>;
+  pushingRowId: string | null;
+  isTranslatingAny: boolean;
+  /** True only while "Translate selected" loop is running. */
+  isTranslatingBulk?: boolean;
+  isPushingBulk: boolean;
+  /** Increment after bulk push (or similar) to clear row selection */
+  selectionResetKey: number;
+  /** IDs pushed to Shopify this session (for Not pushed / Pushed row badges) */
+  sessionPushedIds: Set<string>;
+  filterState: TableFilterState;
+  onFilterChange: (state: TableFilterState) => void;
+  /** Row highlighted when editor is open for that record */
+  activeRowId?: string | null;
+  /** Shopify sync (toolbar) */
+  onSyncFromShopify?: (opts?: { force?: boolean; forceBackup?: boolean }) => void;
+  /** Replace all occurrences of `find` with `replace` across all records; returns updated item count. */
+  onReplaceAll?: (find: string, replace: string, targetIds?: string[]) => number;
+  /** True while CSV parse/upload or Shopify API sync is in progress (disables Sync). */
+  isUploading?: boolean;
+  isShopifySyncing?: boolean;
+  syncProgressPct?: number | null;
+  lastSyncAt?: string | null;
+  lastSyncLabels?: string[] | null;
+}
+
+const PAGE_SIZE = 50;
+
+function ProductTable({
+  records,
+  onOpenEditor,
+  onTranslate,
+  onTranslateSelected,
+  onPushSelected,
+  onInlineFieldChange,
+  onInlineSaveRow,
+  onInlineTranslateRow,
+  onPushRow,
+  pushingRowId,
+  isTranslatingAny,
+  isTranslatingBulk = false,
+  isPushingBulk,
+  selectionResetKey,
+  sessionPushedIds,
+  filterState,
+  onFilterChange,
+  activeRowId,
+  onSyncFromShopify,
+  isUploading,
+  isShopifySyncing,
+  syncProgressPct,
+  lastSyncAt,
+  lastSyncLabels,
+  onReplaceAll,
+}: ProductTableProps) {
+  const { typeFilter, statusFilter, localeFilter, search, currentPage, pushedToShopifyOnly } =
+    filterState;
+
+  function setTypeFilter(v: string)         { onFilterChange({ ...filterState, typeFilter: v,    currentPage: 1 }); }
+  function setStatusFilter(v: StatusFilter) { onFilterChange({ ...filterState, statusFilter: v,  currentPage: 1 }); }
+  function setLocaleFilter(v: string)       { onFilterChange({ ...filterState, localeFilter: v,  currentPage: 1 }); }
+  function setSearch(v: string)             { onFilterChange({ ...filterState, search: v,         currentPage: 1 }); }
+  function setPushedToShopifyOnly(v: boolean) {
+    onFilterChange({ ...filterState, pushedToShopifyOnly: v, currentPage: 1 });
+  }
+
+  const [selectedIds, setSelectedIds]     = useState<Set<string>>(() => new Set());
+
+  // ── Find & Replace state ──
+  const [showReplace, setShowReplace]     = useState(false);
+  const [replaceText, setReplaceText]     = useState("");
+  const [showPreview, setShowPreview]     = useState(false);
+  const [appliedCount, setAppliedCount]   = useState<number | null>(null);
+  const replaceInputRef                   = useRef<HTMLInputElement>(null);
+  const isPushJobRunning = isPushingBulk || pushingRowId !== null;
+  const isResultsLocked = isTranslatingBulk || isPushJobRunning;
+  const lockMessage = isPushJobRunning ? "Pushing to Shopify…" : "Bulk translation in progress…";
+
+  // Metaobject entries and resource-owned metafields are always shown inline
+  // inside their parent editor — never as standalone top-level rows.
+  // LINK records (individual menu items) are shown inside MenuEditor — not in the flat list.
+  const baseRecords = useMemo(
+    () =>
+      records.filter((r) => {
+        if (r.type === "METAOBJECT" || r.type === "METAFIELD") return false;
+        if (r.type === "LINK") return false;
+        return true;
+      }),
+    [records]
+  );
+
+  // Count how many LINK records belong to each MENU (by parentMenuId).
+  const menuItemCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of records) {
+      if (r.type === "LINK" && r.parentMenuId) {
+        counts.set(r.parentMenuId, (counts.get(r.parentMenuId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [records]);
+
+  // Drop stale selection ids if records reload
+  useEffect(() => {
+    const valid = new Set(baseRecords.map((r) => r.id));
+    setSelectedIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (valid.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [baseRecords]);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [selectionResetKey]);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+
+
+  // Available filter values
+  const typeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of baseRecords) {
+      counts.set(r.type, (counts.get(r.type) ?? 0) + 1);
+    }
+    return counts;
+  }, [baseRecords]);
+
+  // METAFIELD and METAOBJECT are nested under parent editors — they never appear
+  // as standalone top-level rows, so exclude them from filter chips.
+  const NESTED_FILTER_TYPES = new Set(["METAFIELD", "METAOBJECT"]);
+
+  // Virtual filter type that groups PRODUCT_OPTION + PRODUCT_OPTION_VALUE into one pill.
+  const PRODUCT_OPTIONS_VIRTUAL = "PRODUCT_OPTION||PRODUCT_OPTION_VALUE";
+
+  const availableTypes = useMemo(() => {
+    const rawTypes = [...typeCounts.keys()].filter((t) => !NESTED_FILTER_TYPES.has(t));
+    const hasOpt   = rawTypes.includes("PRODUCT_OPTION");
+    const hasVal   = rawTypes.includes("PRODUCT_OPTION_VALUE");
+    const types: string[] = rawTypes
+      .filter((t) => t !== "PRODUCT_OPTION" && t !== "PRODUCT_OPTION_VALUE")
+      .sort((a, b) => (typeCounts.get(b) ?? 0) - (typeCounts.get(a) ?? 0));
+    // Insert the virtual "Options & values" pill right after PRODUCT (if present)
+    if (hasOpt || hasVal) {
+      const productIdx = types.indexOf("PRODUCT");
+      types.splice(productIdx === -1 ? 0 : productIdx + 1, 0, PRODUCT_OPTIONS_VIRTUAL);
+    }
+    return types;
+  }, [typeCounts]); // eslint-disable-line react-hooks/exhaustive-deps
+  const availableLocales = useMemo(
+    () => Array.from(new Set(baseRecords.map((r) => r.locale).filter(Boolean))).sort(),
+    [baseRecords]
+  );
+
+  function matchesTypeFilter(rType: string, filter: string): boolean {
+    if (filter === "all") return true;
+    if (filter === PRODUCT_OPTIONS_VIRTUAL) return rType === "PRODUCT_OPTION" || rType === "PRODUCT_OPTION_VALUE";
+    return rType === filter;
+  }
+
+  const pushCountBase = useMemo(
+    () => (typeFilter === "all" ? baseRecords : baseRecords.filter((r) => matchesTypeFilter(r.type, typeFilter))),
+    [baseRecords, typeFilter] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const pushCounts = useMemo(() => {
+    let pushed = 0;
+    for (const r of pushCountBase) {
+      if (sessionPushedIds.has(r.id)) pushed++;
+    }
+    return {
+      all: pushCountBase.length,
+      pushed,
+      notPushed: pushCountBase.length - pushed,
+    };
+  }, [pushCountBase, sessionPushedIds]);
+
+  // Apply all filters + sort; build field-match snippet map for non-title matches
+  const { filtered, matchSnippetMap } = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const snippetMap = new Map<string, FieldMatch>();
+
+    const result = baseRecords.filter((r) => {
+      if (!matchesTypeFilter(r.type, typeFilter)) return false;
+      if (statusFilter !== "all" && r.status !== statusFilter) return false;
+      if (localeFilter !== "all" && r.locale !== localeFilter) return false;
+      if (q) {
+        const titleField   = r.fields.find((f) => f.field === "title" || f.field === "name");
+        const matchHandle  = r.handle.toLowerCase().includes(q);
+        const matchRuTitle = (titleField?.ru_content ?? "").toLowerCase().includes(q);
+        const matchEnTitle = (titleField?.en_content ?? "").toLowerCase().includes(q);
+        const matchId      = r.identification.toLowerCase().includes(q);
+        // Universal field search — all fields including body_html, SEO, metafields, raw HTML
+        const fieldMatch   = (!matchHandle && !matchRuTitle && !matchEnTitle && !matchId)
+          ? findFieldMatch(r, q)
+          : null;
+        if (!matchHandle && !matchRuTitle && !matchEnTitle && !matchId && !fieldMatch) return false;
+        // Store snippet for display — only for non-title matches
+        if (fieldMatch && !matchRuTitle && !matchEnTitle) {
+          snippetMap.set(r.id, fieldMatch);
+        }
+      }
+      const pushed = sessionPushedIds.has(r.id);
+      if (pushedToShopifyOnly && !pushed) return false;
+      return true;
+    });
+
+    // Recently translated first (newest first); tie-break for stable order when timestamps match
+    const sorted = [...result].sort((a, b) => {
+      const ta = a.translatedAt ?? 0;
+      const tb = b.translatedAt ?? 0;
+      if (tb !== ta) return tb - ta;
+      return b.id.localeCompare(a.id);
+    });
+
+    return { filtered: sorted, matchSnippetMap: snippetMap };
+  }, [baseRecords, typeFilter, statusFilter, localeFilter, search, pushedToShopifyOnly, sessionPushedIds]);
+
+  // Unique / total count for the "Options & values" pill and subtitle.
+  // Derived from ALL base records so the pill count is stable regardless of status/search filters.
+  const { optionsUniqueCount, optionsTotalCount } = useMemo(() => {
+    const optionRecords = baseRecords.filter((r) => isOptionType(r.type));
+    const seen = new Set(optionRecords.map(optionFingerprint));
+    return { optionsUniqueCount: seen.size, optionsTotalCount: optionRecords.length };
+  }, [baseRecords]);
+
+  // When the "Options & values" filter is active, collapse identical source strings
+  // into one representative row (display-only dedup — DB records unchanged).
+  // sharedCountMap: representative record.id → total # of base records sharing that fingerprint.
+  const { displayRecords, sharedCountMap } = useMemo(() => {
+    if (typeFilter !== PRODUCT_OPTIONS_VIRTUAL) {
+      return { displayRecords: filtered, sharedCountMap: new Map<string, number>() };
+    }
+
+    // Count all option base records per fingerprint (full count, not filter-limited)
+    const allFpCount = new Map<string, number>();
+    for (const r of baseRecords) {
+      if (!isOptionType(r.type)) continue;
+      const fp = optionFingerprint(r);
+      allFpCount.set(fp, (allFpCount.get(fp) ?? 0) + 1);
+    }
+
+    // Pick the first (most-recently-translated) representative per fingerprint from filtered
+    const seenFp = new Map<string, TranslationRecord>();
+    for (const r of filtered) {
+      const fp = optionFingerprint(r);
+      if (!seenFp.has(fp)) seenFp.set(fp, r);
+    }
+
+    const deduped = [...seenFp.values()];
+    const countMap = new Map<string, number>(
+      deduped.map((r) => [r.id, allFpCount.get(optionFingerprint(r)) ?? 1])
+    );
+
+    return { displayRecords: deduped, sharedCountMap: countMap };
+  }, [typeFilter, filtered, baseRecords]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Replace matches — only computed when replace mode is open and find is non-empty
+  const replaceBaseRecords = useMemo(
+    () => (selectedIds.size > 0 ? baseRecords.filter((r) => selectedIds.has(r.id)) : baseRecords),
+    [baseRecords, selectedIds]
+  );
+  const replaceMatches = useMemo(
+    () => (showReplace && search.trim() ? computeReplaceMatches(replaceBaseRecords, search.trim(), replaceText) : []),
+    [showReplace, search, replaceText, replaceBaseRecords]
+  );
+  const totalReplacementCount = useMemo(
+    () => replaceMatches.reduce((sum, m) => sum + m.replacements, 0),
+    [replaceMatches]
+  );
+  const matchedItemCount = useMemo(
+    () => new Set(replaceMatches.map((m) => m.recordId)).size,
+    [replaceMatches]
+  );
+
+  // Auto-focus replace input when it becomes visible on mobile
+  useEffect(() => {
+    if (showReplace) {
+      setTimeout(() => replaceInputRef.current?.focus(), 50);
+    }
+  }, [showReplace]);
+
+  function handleApplyReplace() {
+    const find = search.trim();
+    if (!find || !onReplaceAll) return;
+    const targetIds = selectedIds.size > 0 ? [...selectedIds] : undefined;
+    const count = onReplaceAll(find, replaceText, targetIds);
+    setAppliedCount(count);
+    setShowPreview(false);
+  }
+
+  // Pagination — based on displayRecords (deduped for Options & values, plain otherwise)
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(displayRecords.length / PAGE_SIZE)),
+    [displayRecords.length]
+  );
+  const safePage = useMemo(() => Math.min(currentPage, totalPages), [currentPage, totalPages]);
+  const pageStart = useMemo(() => (safePage - 1) * PAGE_SIZE, [safePage]);
+  const paginated = useMemo(
+    () => displayRecords.slice(pageStart, pageStart + PAGE_SIZE),
+    [displayRecords, pageStart]
+  );
+
+  const paginatedForRender = useMemo(() => {
+    if (typeFilter !== "METAFIELD") return paginated;
+    return [...paginated].sort((a, b) => {
+      const ga = metafieldGroupKey(a);
+      const gb = metafieldGroupKey(b);
+      if (ga !== gb) return ga.localeCompare(gb);
+      return a.id.localeCompare(b.id);
+    });
+  }, [paginated, typeFilter]);
+
+  const selectedCount = selectedIds.size;
+  const allFullyTranslated =
+    selectedCount > 0 &&
+    records.filter((r) => selectedIds.has(r.id)).every((r) => r.status === "translated");
+  const pageIds = useMemo(() => paginatedForRender.map((r) => r.id), [paginatedForRender]);
+  const allOnPageSelected =
+    pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const someOnPageSelected = pageIds.some((id) => selectedIds.has(id));
+
+  const toggleSelectAllOnPage = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
+      return next;
+    });
+  }, [allOnPageSelected, pageIds]);
+
+  const selectAllFiltered = useCallback(() => {
+    setSelectedIds(new Set(displayRecords.map((r) => r.id)));
+  }, [displayRecords]);
+
+
+  const goToPage = useCallback(
+    (page: number) => {
+      const clamped = Math.max(1, Math.min(page, totalPages));
+      onFilterChange({ ...filterState, currentPage: clamped });
+      const scrollEl = document.getElementById("shopify-translator-list-scroll");
+      if (scrollEl) scrollEl.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    [totalPages, filterState, onFilterChange]
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Sticky: stats + filters + “Select all” stay visible while scrolling the list */}
+      <div className="sticky top-0 z-10 space-y-4 bg-slate-50 pb-2 shadow-[0_6px_8px_-4px_rgba(15,23,42,0.06)]">
+      {/* ── Toolbar ── */}
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm">
+        {/* Top bar: stats + actions
+            Mobile:  flex-col — [Sync▼ EN] / last synced / [Translate] [Publish]
+            Desktop: flex-row — left group (Sync+stat+lastsynced) | right group (buttons)
+        */}
+        <div className="flex flex-col gap-2 px-4 py-3 md:flex-row md:flex-nowrap md:items-center md:justify-between md:gap-3 md:px-5 border-b border-gray-100">
+
+          {/* ── LEFT / TOP group ──────────────────────────────────────────── */}
+          <div className="flex flex-col md:flex-row md:items-center md:gap-2 min-w-0">
+
+            {/* Row: Sync▼ + EN (+ stat text and last synced on desktop) */}
+            <div className="flex items-center gap-2 min-w-0">
+              {onSyncFromShopify && (
+                <div className="shrink-0">
+                  <SyncToolbar
+                    onSync={onSyncFromShopify}
+                    disabled={Boolean(isUploading)}
+                    isSyncing={Boolean(isShopifySyncing)}
+                    syncProgressPct={syncProgressPct ?? null}
+                    lastSyncAt={lastSyncAt ?? null}
+                    lastSyncLabels={lastSyncLabels ?? null}
+                    showLastSynced={false}
+                  />
+                </div>
+              )}
+              {/* Last synced — desktop inline */}
+              {onSyncFromShopify && lastSyncAt != null && (
+                <span className="hidden md:inline text-xs text-gray-400 tabular-nums">
+                  · Last synced: {formatLastSyncedRelative(lastSyncAt)}
+                  {lastSyncLabels != null && lastSyncLabels.length > 0 ? ` · ${lastSyncLabels.join(", ")}` : ""}
+                </span>
+              )}
+            </div>
+
+            {/* Last synced — mobile only, below sync row */}
+            {onSyncFromShopify && lastSyncAt != null && (
+              <p className="md:hidden text-xs text-gray-500 tabular-nums mt-2 md:mt-1">
+                Last synced: {formatLastSyncedRelative(lastSyncAt)}
+                {lastSyncLabels != null && lastSyncLabels.length > 0 ? ` · ${lastSyncLabels.join(", ")}` : ""}
+              </p>
+            )}
+          </div>
+
+          {/* ── Action buttons ────────────────────────────────────────────── */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void onTranslateSelected([...selectedIds], allFullyTranslated)}
+              disabled={isTranslatingAny || isPushingBulk || selectedCount === 0}
+              title={allFullyTranslated ? "This will overwrite existing translations" : undefined}
+              className={`flex flex-1 md:flex-none items-center justify-center px-4 py-2.5 md:px-3 md:py-1.5 rounded-lg text-sm font-medium transition-all min-h-[40px] md:min-h-0
+                ${isTranslatingAny || isPushingBulk || selectedCount === 0
+                  ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                  : "bg-blue-600 text-white hover:bg-blue-700"
+                }`}
+            >
+              {isTranslatingAny ? "Translating…" : allFullyTranslated ? `Re-translate (${selectedCount})` : `Translate (${selectedCount})`}
+            </button>
+            <button
+              type="button"
+              onClick={() => void onPushSelected([...selectedIds])}
+              disabled={isTranslatingAny || isPushingBulk || selectedCount === 0}
+              className={`flex flex-1 md:flex-none items-center justify-center px-4 py-2.5 md:px-3 md:py-1.5 rounded-lg text-sm font-medium transition-all min-h-[40px] md:min-h-0
+                ${isTranslatingAny || isPushingBulk || selectedCount === 0
+                  ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                  : "bg-[#008060] text-white hover:bg-[#006e52]"
+                }`}
+            >
+              {isPushingBulk ? "Publishing…" : `Publish (${selectedCount})`}
+            </button>
+          </div>
+        </div>
+
+        {/* ── Search + Replace — own section above filters ── */}
+        <div className="px-4 sm:px-5 pt-3 pb-2">
+
+          {/* Row 1: [ Search (flex-1) ] [ Replace toggle button ]
+              Always a single row on both mobile and desktop. */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 min-w-0 w-full max-w-full box-border">
+              <svg
+                className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setAppliedCount(null); setShowPreview(false); }}
+                placeholder="Search all content, HTML, SEO…"
+                className="w-full max-w-full box-border pl-8 pr-8 py-2 text-sm bg-white border border-gray-300 rounded-lg outline-none focus:border-gray-400 transition-colors duration-150 placeholder-gray-300"
+              />
+              {search && (
+                <button
+                  onClick={() => { setSearch(""); setShowPreview(false); setAppliedCount(null); }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+
+            {/* Replace toggle button.
+                Mobile inactive:  icon + "Replace" label
+                Mobile active:    icon only (label hidden)
+                Desktop:          always icon + "Replace" label */}
+            <button
+              type="button"
+              title={showReplace ? "Close Find & Replace" : "Find & Replace"}
+              onClick={() => { setShowReplace((v) => !v); setShowPreview(false); setAppliedCount(null); }}
+              className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium transition-all duration-150 ${
+                showReplace
+                  ? "bg-gray-100 border-gray-300 text-gray-700"
+                  : "border-gray-200 text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50"
+              }`}
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+              {/* Hide label on mobile when replace is active (icon-only saves space) */}
+              <span className={showReplace ? "hidden md:inline" : undefined}>Replace</span>
+            </button>
+          </div>
+
+          {/* Replace panel — slides in below Row 1.
+              ┌─────────────────────────────────────────────────────────────┐
+              │ Mobile layout:                                              │
+              │   Line A: [ ⇄ icon-close ] [ replace input (flex-1) ]      │
+              │   Line B: [ Preview (flex-1) ] [ Apply (flex-1) ]           │
+              ├─────────────────────────────────────────────────────────────┤
+              │ Desktop layout (md+):                                       │
+              │   Line A: [ replace input (flex-1) ] [ Preview ] [ Apply ] │
+              └─────────────────────────────────────────────────────────────┘ */}
+          <div
+            className={`overflow-hidden transition-all duration-150 ease-in-out ${
+              showReplace ? "max-h-40 opacity-100 mt-2" : "max-h-0 opacity-0 pointer-events-none"
+            }`}
+          >
+            {/* ── Mobile layout (< md) ── */}
+            <div className="md:hidden flex flex-col gap-2">
+              {/* Line A: icon-only close toggle + replace input */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  title="Close Find & Replace"
+                  onClick={() => { setShowReplace(false); setShowPreview(false); setAppliedCount(null); }}
+                  className="shrink-0 flex items-center justify-center w-9 h-9 rounded-lg border border-gray-300 bg-gray-100 text-gray-700 transition-all duration-150"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                </button>
+                <input
+                  ref={replaceInputRef}
+                  type="text"
+                  value={replaceText}
+                  onChange={(e) => { setReplaceText(e.target.value); setAppliedCount(null); setShowPreview(false); }}
+                  placeholder={search.trim() ? `Replace "${search.trim()}" with…` : "Enter replacement text"}
+                  className="flex-1 min-w-[120px] w-full max-w-full box-border px-3 py-2 text-sm bg-gray-50 border border-gray-300 rounded-lg outline-none focus:border-gray-400 transition-colors duration-150 placeholder-gray-400"
+                />
+              </div>
+              {/* Line B: Preview + Apply CTAs */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!search.trim() || !replaceText.trim() || replaceMatches.length === 0}
+                  onClick={() => setShowPreview((v) => !v)}
+                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors duration-150 whitespace-nowrap ${
+                    !search.trim() || !replaceText.trim() || replaceMatches.length === 0
+                      ? "border-gray-200 text-gray-400 opacity-50 cursor-not-allowed"
+                      : showPreview
+                        ? "bg-amber-100 border-amber-300 text-amber-800"
+                        : "bg-amber-500 border-amber-500 text-white hover:bg-amber-600 hover:border-amber-600"
+                  }`}
+                  title={totalReplacementCount > 0 ? `${totalReplacementCount} replacement${totalReplacementCount !== 1 ? "s" : ""} across ${matchedItemCount} item${matchedItemCount !== 1 ? "s" : ""}` : undefined}
+                >
+                  {showPreview
+                    ? "Preview active"
+                    : totalReplacementCount > 0
+                      ? `Preview (${totalReplacementCount} matches)`
+                      : "Preview"}
+                </button>
+                <button
+                  type="button"
+                  disabled={!search.trim() || !replaceText.trim() || replaceMatches.length === 0 || !onReplaceAll}
+                  onClick={handleApplyReplace}
+                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors duration-150 whitespace-nowrap ${
+                    !search.trim() || !replaceText.trim() || replaceMatches.length === 0 || !onReplaceAll
+                      ? "border-gray-200 text-gray-400 opacity-50 cursor-not-allowed"
+                      : showPreview
+                        ? "bg-gray-900 border-gray-900 text-white hover:bg-black"
+                        : "border-gray-300 text-gray-500 hover:border-gray-400 hover:text-gray-700"
+                  }`}
+                >
+                  Apply{matchedItemCount > 0 ? ` (${matchedItemCount} items)` : ""}
+                </button>
+                {appliedCount !== null && (
+                  <span className="shrink-0 text-xs text-emerald-600 font-medium whitespace-nowrap">
+                    ✓ {appliedCount} updated
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* ── Desktop layout (md+) — unchanged ── */}
+            <div className="hidden md:flex items-center gap-2 w-full max-w-full box-border">
+              <input
+                type="text"
+                value={replaceText}
+                onChange={(e) => { setReplaceText(e.target.value); setAppliedCount(null); setShowPreview(false); }}
+                placeholder={search.trim() ? `Replace "${search.trim()}" with…` : "Enter replacement text"}
+                className="flex-1 min-w-0 w-full max-w-full box-border pl-3 pr-3 py-2 text-sm bg-gray-50 border border-gray-300 rounded-lg outline-none focus:border-gray-400 transition-colors duration-150 placeholder-gray-400"
+              />
+              {/* Preview — amber CTA before active, muted badge after */}
+              <button
+                type="button"
+                disabled={!search.trim() || !replaceText.trim() || replaceMatches.length === 0}
+                onClick={() => setShowPreview((v) => !v)}
+                className={`shrink-0 px-3 py-2 rounded-lg border text-sm font-medium transition-colors duration-150 whitespace-nowrap ${
+                  !search.trim() || !replaceText.trim() || replaceMatches.length === 0
+                    ? "border-gray-200 text-gray-400 opacity-50 cursor-not-allowed"
+                    : showPreview
+                      ? "bg-amber-100 border-amber-300 text-amber-800"
+                      : "bg-amber-500 border-amber-500 text-white hover:bg-amber-600 hover:border-amber-600"
+                }`}
+                title={totalReplacementCount > 0 ? `${totalReplacementCount} replacement${totalReplacementCount !== 1 ? "s" : ""} across ${matchedItemCount} item${matchedItemCount !== 1 ? "s" : ""}` : undefined}
+              >
+                {showPreview
+                  ? "Preview active"
+                  : totalReplacementCount > 0
+                    ? `Preview (${totalReplacementCount} matches)`
+                    : "Preview"}
+              </button>
+              {/* Apply — muted until preview is open, then primary black */}
+              <button
+                type="button"
+                disabled={!search.trim() || !replaceText.trim() || replaceMatches.length === 0 || !onReplaceAll}
+                onClick={handleApplyReplace}
+                className={`shrink-0 px-3 py-2 rounded-lg border text-sm font-medium transition-colors duration-150 whitespace-nowrap ${
+                  !search.trim() || !replaceText.trim() || replaceMatches.length === 0 || !onReplaceAll
+                    ? "border-gray-200 text-gray-400 opacity-50 cursor-not-allowed"
+                    : showPreview
+                      ? "bg-gray-900 border-gray-900 text-white hover:bg-black"
+                      : "border-gray-300 text-gray-500 hover:border-gray-400 hover:text-gray-700"
+                }`}
+              >
+                Apply{matchedItemCount > 0 ? ` (${matchedItemCount} items)` : ""}
+              </button>
+              {appliedCount !== null && (
+                <span className="shrink-0 text-xs text-emerald-600 font-medium whitespace-nowrap">
+                  ✓ {appliedCount} updated
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Filter bar: type chips ── */}
+        <div className="flex flex-wrap items-center gap-1.5 px-5 py-2.5 border-b border-gray-100">
+          <button
+            onClick={() => setTypeFilter("all")}
+            className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all
+              ${typeFilter === "all" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+          >
+            All <span className="opacity-60 ml-0.5">{baseRecords.length.toLocaleString()}</span>
+          </button>
+
+          {availableTypes.map((type) => {
+            const isVirtualOptions = type === PRODUCT_OPTIONS_VIRTUAL;
+            // For Options & values pill: show unique-digest count so merchants see "12" not "3,428"
+            const count = isVirtualOptions
+              ? optionsUniqueCount
+              : (typeCounts.get(type) ?? 0);
+            const active = typeFilter === type;
+            const label  = isVirtualOptions ? "Options & values" : humanTypeLabel(type);
+            return (
+              <button
+                type="button"
+                key={type}
+                onClick={() => setTypeFilter(type)}
+                title={
+                  isVirtualOptions && optionsTotalCount > 0
+                    ? `${optionsUniqueCount.toLocaleString()} unique values across ${optionsTotalCount.toLocaleString()} records`
+                    : undefined
+                }
+                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all
+                  ${active ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+              >
+                {label}{" "}
+                <span className="opacity-60 tabular-nums">{count.toLocaleString()}</span>
+              </button>
+            );
+          })}
+
+          {availableLocales.length > 1 && (
+            <div className="flex items-center gap-1">
+              <div className="w-px h-4 bg-gray-200 mx-0.5" />
+              <button
+                onClick={() => setLocaleFilter("all")}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all
+                  ${localeFilter === "all" ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+              >
+                All locales
+              </button>
+              {availableLocales.map((loc) => (
+                <button
+                  key={loc}
+                  onClick={() => setLocaleFilter(loc)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-mono font-medium transition-all
+                    ${localeFilter === loc ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                >
+                  {loc}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── Options & values dedup info bar ── */}
+        {typeFilter === PRODUCT_OPTIONS_VIRTUAL && optionsTotalCount > 0 && (
+          <div className="px-5 py-1.5 border-b border-blue-100 bg-blue-50/40 flex items-center gap-1.5">
+            <svg className="w-3.5 h-3.5 text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="text-[11px] text-blue-700">
+              Showing{" "}
+              <strong>{optionsUniqueCount.toLocaleString()} unique {optionsUniqueCount === 1 ? "value" : "values"}</strong>
+              {optionsTotalCount !== optionsUniqueCount && (
+                <> across <strong>{optionsTotalCount.toLocaleString()} records</strong> — duplicates collapsed</>
+              )}
+            </span>
+          </div>
+        )}
+
+        {/* ── Status filter row: statuses (left) · Pushed toggle (right) ── */}
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-2">
+          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+            {(["all", "new", "outdated", "partial", "translated"] as StatusFilter[]).map((s) => {
+              const base = baseRecords.filter((r) => matchesTypeFilter(r.type, typeFilter));
+              const count = s === "all" ? base.length : base.filter((r) => r.status === s).length;
+              const colors: Record<string, string> = {
+                all:        statusFilter === "all"        ? "bg-gray-900 text-white"        : "bg-gray-100 text-gray-600 hover:bg-gray-200",
+                new:        statusFilter === "new"        ? "bg-amber-500 text-white"       : "bg-amber-50 text-amber-700 hover:bg-amber-100",
+                outdated:   statusFilter === "outdated"   ? "bg-orange-500 text-white"      : "bg-orange-50 text-orange-700 hover:bg-orange-100",
+                partial:    statusFilter === "partial"    ? "bg-blue-500 text-white"        : "bg-blue-50 text-blue-700 hover:bg-blue-100",
+                translated: statusFilter === "translated" ? "bg-green-600 text-white"       : "bg-green-50 text-green-700 hover:bg-green-100",
+              };
+              return (
+                <button
+                  type="button"
+                  key={s}
+                  onClick={() => setStatusFilter(s)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all capitalize ${colors[s]}`}
+                >
+                  {s === "all" ? "All Statuses" : s} <span className="opacity-70 ml-0.5">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <label className="inline-flex items-center gap-2.5 cursor-pointer select-none">
+              <span className="text-xs font-medium text-gray-700">Pushed to Shopify</span>
+              <span className="relative inline-block h-6 w-11 shrink-0 align-middle">
+                <input
+                  type="checkbox"
+                  className="peer sr-only"
+                  checked={pushedToShopifyOnly}
+                  onChange={(e) => setPushedToShopifyOnly(e.target.checked)}
+                  aria-label="Show only records pushed to Shopify this session"
+                />
+                <span
+                  className="absolute inset-0 rounded-full border border-gray-200 bg-gray-200 transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400 peer-focus-visible:ring-offset-2 peer-checked:border-emerald-600 peer-checked:bg-emerald-600"
+                  aria-hidden
+                />
+                <span
+                  className="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ease-out peer-checked:translate-x-5"
+                  aria-hidden
+                />
+              </span>
+              <span className="text-[11px] text-gray-400 tabular-nums">
+                {pushCounts.pushed.toLocaleString()} pushed
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div className="relative">
+      {/* ── Find & Replace preview panel ── */}
+      {showReplace && showPreview && replaceMatches.length > 0 && (
+        <div className="border border-amber-200 rounded-xl bg-amber-50/60 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-amber-200">
+            <div className="flex items-center gap-2">
+              <svg className="w-3.5 h-3.5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <span className="text-xs font-semibold text-amber-800">
+                {matchedItemCount} item{matchedItemCount !== 1 ? "s" : ""} · {replaceMatches.length} match{replaceMatches.length !== 1 ? "es" : ""} · {totalReplacementCount} total replacement{totalReplacementCount !== 1 ? "s" : ""}{selectedIds.size > 0 ? ` · selected ${selectedIds.size}` : ""} — preview only
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPreview(false)}
+              className="text-xs text-amber-500 hover:text-amber-700 hover:underline"
+            >
+              Close
+            </button>
+          </div>
+          <div className="max-h-64 overflow-y-auto divide-y divide-amber-100">
+            {replaceMatches.slice(0, 50).map((m, i) => (
+              <div key={i} className="flex items-start gap-3 px-4 py-2.5 text-xs hover:bg-amber-50">
+                {/* Resource info */}
+                <div className="w-32 shrink-0">
+                  <p className="font-medium text-gray-800 truncate" title={m.title}>{m.title}</p>
+                  <span className="text-gray-400 font-mono">{m.resourceType}</span>
+                </div>
+                {/* Field badge */}
+                <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 font-medium mt-0.5">
+                  {m.fieldLabel}
+                  <span className="text-indigo-300">·</span>
+                  {m.side === "ru" ? "RU" : "EN"}
+                </span>
+                {/* Before → after */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <p className="text-gray-500 truncate min-w-0">
+                      <span className="text-gray-400 mr-1">Before</span>
+                      <HighlightText text={m.beforeSnippet} query={search} />
+                    </p>
+                    <span className="text-gray-300 shrink-0">→</span>
+                    <p className="text-gray-700 truncate min-w-0">
+                      <span className="text-gray-400 mr-1">After</span>
+                      <HighlightText text={m.afterSnippet} query={replaceText} />
+                    </p>
+                    <span className="text-[10px] text-indigo-600 bg-indigo-50 border border-indigo-200 rounded px-1 py-0.5 shrink-0">
+                      ×{m.replacements}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {replaceMatches.length > 50 && (
+              <p className="text-xs text-gray-400 text-center py-2">
+                … and {replaceMatches.length - 50} more matches not shown
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Results summary (sticky with toolbar) ── */}
+      {displayRecords.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-400 px-1">
+          <div className="flex flex-wrap items-center gap-3">
+            <span>
+              {search || statusFilter !== "all"
+                ? `${displayRecords.length.toLocaleString()} result${displayRecords.length !== 1 ? "s" : ""} found`
+                : `${displayRecords.length.toLocaleString()} records`}
+              {totalPages > 1 && (
+                <span className="ml-1">
+                  · showing {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, displayRecords.length)}
+                </span>
+              )}
+            </span>
+            {pageIds.length > 0 && (
+              <label className="flex items-center gap-1.5 text-gray-600 cursor-pointer select-none">
+                <span className="inline-flex items-center justify-center shrink-0 w-[1.05rem] h-[1.05rem]">
+                  <input
+                    type="checkbox"
+                    checked={allOnPageSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someOnPageSelected && !allOnPageSelected;
+                    }}
+                    onChange={toggleSelectAllOnPage}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600"
+                  />
+                </span>
+                <span>Select all on this page</span>
+              </label>
+            )}
+            {allOnPageSelected && selectedCount < displayRecords.length && (
+              <button
+                type="button"
+                onClick={selectAllFiltered}
+                className="text-blue-600 hover:underline font-medium"
+                title="Select all records matching current filters"
+              >
+                Select all {displayRecords.length.toLocaleString()} matching this search
+              </button>
+            )}
+            {selectedCount === displayRecords.length && displayRecords.length > pageIds.length && (
+              <span className="text-blue-600 font-medium">
+                All {displayRecords.length.toLocaleString()} matching records are selected
+              </span>
+            )}
+            {selectedCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="text-blue-600 hover:underline font-medium"
+              >
+                Clear selection ({selectedCount})
+              </button>
+            )}
+          </div>
+          {search && (
+            <button type="button" onClick={() => setSearch("")} className="text-blue-500 hover:underline">
+              Clear search
+            </button>
+          )}
+        </div>
+      )}
+      </div>
+
+      {/* ── Record list ── */}
+      <div className="relative">
+      {displayRecords.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <svg className="w-10 h-10 mx-auto mb-3 text-gray-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p className="font-medium">No records match your filters</p>
+          <button
+            type="button"
+            onClick={() =>
+              onFilterChange({
+                ...filterState,
+                typeFilter: "all",
+                statusFilter: "all",
+                pushedToShopifyOnly: false,
+                localeFilter: "all",
+                search: "",
+                currentPage: 1,
+              })
+            }
+            className="mt-3 text-sm text-blue-600 hover:underline"
+          >
+            Clear all filters
+          </button>
+        </div>
+      ) : (
+        <div
+          className="space-y-3"
+          key={`${typeFilter}|${statusFilter}|${localeFilter}|${pushedToShopifyOnly}|${search.trim()}`}
+        >
+          {paginatedForRender.map((record, i) => {
+            const prev = i > 0 ? paginatedForRender[i - 1] : null;
+            const currGroup = typeFilter === "METAFIELD" ? metafieldGroupKey(record) : null;
+            const prevGroup = typeFilter === "METAFIELD" && prev ? metafieldGroupKey(prev) : null;
+            const showGroupHeader = typeFilter === "METAFIELD" && currGroup !== prevGroup;
+            const [parentType, parentTitle] = currGroup ? currGroup.split("›") : ["", ""];
+            return (
+              <div key={record.id} className="space-y-1.5">
+                {showGroupHeader && (
+                  <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500 border-b border-gray-200">
+                    {parentType} &#8250; {parentTitle}
+                  </div>
+                )}
+                <ProductRow
+                  record={record}
+                  index={pageStart + i}
+                  searchQuery={search}
+                  matchSnippet={matchSnippetMap.get(record.id)}
+                  onOpenEditor={onOpenEditor}
+                  onTranslate={onTranslate}
+                  onPushRow={onPushRow}
+                  pushingRowId={pushingRowId}
+                  isPushingBulk={isPushingBulk}
+                  selected={selectedIds.has(record.id)}
+                  onToggleSelect={toggleSelect}
+                  pushedToShopify={sessionPushedIds.has(record.id)}
+                  activeRowId={activeRowId}
+                  onInlineFieldChange={onInlineFieldChange}
+                  onInlineSaveRow={onInlineSaveRow}
+                  onInlineTranslateRow={onInlineTranslateRow}
+                  menuItemCount={
+                    record.type === "MENU"
+                      ? (menuItemCounts.get(record.identification) ?? 0)
+                      : undefined
+                  }
+                  sharedCount={sharedCountMap.get(record.id)}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Pagination ── */}
+      {totalPages > 1 && (
+        <Pagination
+          currentPage={safePage}
+          totalPages={totalPages}
+          totalItems={displayRecords.length}
+          pageSize={PAGE_SIZE}
+          onPageChange={goToPage}
+        />
+      )}
+      {isResultsLocked && (
+        <div className="absolute inset-0 z-20 bg-slate-50/70 backdrop-blur-[1px] flex items-start justify-center pt-8">
+          <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white/95 px-3 py-2 shadow-sm text-sm text-slate-700">
+            <BtnSpinner />
+            <span>{lockMessage}</span>
+          </div>
+        </div>
+      )}
+      </div>
+      </div>
+    </div>
+  );
+}
+
+export default memo(ProductTable);
+
+// ── Pagination component ───────────────────────────────────────────────────
+
+function Pagination({
+  currentPage,
+  totalPages,
+  totalItems,
+  pageSize,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  const pageList = useMemo((): (number | "…")[] => {
+    if (totalPages <= 7) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    const pages: (number | "…")[] = [1];
+    if (currentPage > 3) pages.push("…");
+    for (let p = Math.max(2, currentPage - 1); p <= Math.min(totalPages - 1, currentPage + 1); p++) {
+      pages.push(p);
+    }
+    if (currentPage < totalPages - 2) pages.push("…");
+    pages.push(totalPages);
+    return pages;
+  }, [currentPage, totalPages]);
+
+  const from = (currentPage - 1) * pageSize + 1;
+  const to   = Math.min(currentPage * pageSize, totalItems);
+
+  return (
+    <div className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-5 py-3 shadow-sm">
+      <span className="text-xs text-gray-400 tabular-nums">
+        {from.toLocaleString()}–{to.toLocaleString()} of {totalItems.toLocaleString()} records
+      </span>
+
+      <div className="flex items-center gap-1">
+        <PaginationBtn
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          title="Previous page"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+        </PaginationBtn>
+
+        {pageList.map((p, i) =>
+          p === "…" ? (
+            <span key={`ellipsis-${i}`} className="w-8 text-center text-xs text-gray-400 select-none">…</span>
+          ) : (
+            <PaginationBtn
+              key={p}
+              onClick={() => onPageChange(p as number)}
+              active={p === currentPage}
+            >
+              {p}
+            </PaginationBtn>
+          )
+        )}
+
+        <PaginationBtn
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages}
+          title="Next page"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </PaginationBtn>
+      </div>
+
+      {/* Jump to page */}
+      <div className="flex items-center gap-2 text-xs text-gray-400">
+        <span>Go to</span>
+        <input
+          type="number"
+          min={1}
+          max={totalPages}
+          defaultValue={currentPage}
+          key={currentPage}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              const val = parseInt((e.target as HTMLInputElement).value, 10);
+              if (!isNaN(val)) onPageChange(val);
+            }
+          }}
+          className="w-12 px-2 py-1 border border-gray-200 rounded-md text-center focus:outline-none focus:ring-2 focus:ring-blue-400 text-gray-700"
+        />
+        <span className="text-gray-400">/ {totalPages}</span>
+      </div>
+    </div>
+  );
+}
+
+function PaginationBtn({
+  onClick,
+  disabled,
+  active,
+  title,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={`w-8 h-8 flex items-center justify-center rounded-md text-sm transition-all
+        ${active
+          ? "bg-blue-600 text-white font-semibold"
+          : "text-gray-600 hover:bg-gray-100"
+        }
+        ${disabled ? "opacity-30 cursor-not-allowed" : "cursor-pointer"}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ── Icon helpers ───────────────────────────────────────────────────────────
+
+function BtnSpinner() {
+  return (
+    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    </svg>
+  );
+}

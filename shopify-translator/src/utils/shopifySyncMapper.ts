@@ -1,4 +1,4 @@
-﻿import { TranslationRecord, TranslationField, ShopifySyncProductRow } from "@/types";
+import { TranslationRecord, TranslationField, ShopifySyncProductRow } from "@/types";
 import { TARGET_LOCALE } from "@/lib/storeConfig";
 import { deriveRecordStatus, getFieldType } from "@/utils/csvParser";
 import { deriveTranslationStatus } from "@/utils/translationStatus";
@@ -24,10 +24,8 @@ function fieldsFromDynamicRow(row: ShopifySyncProductRow): TranslationField[] {
     return a.localeCompare(b);
   });
 
-  const imageAltRe = /^image\.(\d+)\.alt$/;
   return entries.map(([fieldKey, value]) => {
     const en = value?.en_content ?? "";
-    const imageAltMatch = imageAltRe.exec(fieldKey);
     return {
       field: fieldKey,
       fieldType: value?.fieldType ?? getFieldType(fieldKey),
@@ -35,7 +33,10 @@ function fieldsFromDynamicRow(row: ShopifySyncProductRow): TranslationField[] {
       en_content: en,
       csvStatus: "",
       status: fieldStatus(en),
-      displayName: value?.displayName ?? (imageAltMatch ? `Image alt — #${imageAltMatch[1]}` : undefined),
+      displayName: value?.displayName ?? (
+        // MEDIA_IMAGE translatableContent key may be "alt" or "image.alt" depending on API version
+        fieldKey === "alt" || fieldKey === "image.alt" ? "Image alt text" : undefined
+      ),
       namespaceKey: value?.namespaceKey,
       metafieldId: value?.metafieldId,
       parentTitle: value?.parentTitle,
@@ -58,6 +59,21 @@ export function mergeShopifySyncWithPrevious(
     const titleF = rec.fields.find((f) => f.field === "title");
     const newRu = titleF?.ru_content ?? "";
 
+    // METAFIELD translations are pushed to gid://shopify/Metafield/XXX, but the
+    // sync batch query only fetches translations for the Product resource — so
+    // METAFIELD rows always arrive with en_content:"" even after a successful push.
+    // Preserve any non-empty previous en_content so pushed values survive resync.
+    const overlayPrevTranslations = (fields: TranslationField[]): TranslationField[] => {
+      if (rec.type !== "METAFIELD" || !prev) return fields;
+      const prevFieldMap = new Map(prev.fields.map((f) => [f.field, f]));
+      return fields.map((f) => {
+        if (f.en_content.trim()) return f; // incoming has a value — trust it
+        const pf = prevFieldMap.get(f.field);
+        if (!pf?.en_content?.trim()) return f; // nothing to restore
+        return { ...f, en_content: pf.en_content, status: pf.status };
+      });
+    };
+
     if (!prev) {
       return {
         ...rec,
@@ -72,21 +88,26 @@ export function mergeShopifySyncWithPrevious(
       "";
 
     if (newRu === prevSnap) {
+      const fields = overlayPrevTranslations(rec.fields);
       return {
         ...rec,
+        fields,
+        status: deriveRecordStatus(fields),
         sourceTitleAtSync: newRu,
-        translation_status: deriveTranslationStatus(rec.fields),
+        translation_status: deriveTranslationStatus(fields),
       };
     }
 
-    const fields = rec.fields.map((f) => {
-      if (f.field !== "title") return f;
-      const enOk = f.en_content.trim().length > 0;
-      return {
-        ...f,
-        status: enOk ? ("outdated" as const) : f.status,
-      };
-    });
+    const fields = overlayPrevTranslations(
+      rec.fields.map((f) => {
+        if (f.field !== "title") return f;
+        const enOk = f.en_content.trim().length > 0;
+        return {
+          ...f,
+          status: enOk ? ("outdated" as const) : f.status,
+        };
+      })
+    );
 
     return {
       ...rec,
@@ -204,6 +225,8 @@ export function shopifySyncRowsToTranslationRecords(
       ...(row.menuItemDepth !== undefined ? { menuItemDepth: row.menuItemDepth } : {}),
       ...(row.parentLinkId !== undefined ? { parentLinkId: row.parentLinkId } : {}),
       ...(row.itemIndex !== undefined ? { itemIndex: row.itemIndex } : {}),
+      // Parent product linkage (populated for MEDIA_IMAGE records after a full sync)
+      ...(row.parentProductHandle !== undefined ? { parentProductHandle: row.parentProductHandle } : {}),
     };
   });
 }

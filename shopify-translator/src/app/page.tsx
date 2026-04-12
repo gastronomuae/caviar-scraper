@@ -1,1 +1,63 @@
-﻿import { headers } from "next/headers";import { redirect } from "next/navigation";import { resolveToken, normalizeShopifyAdminDomain } from "@/lib/server/shopifyTokenStore";import TranslatorApp from "@/components/TranslatorApp";/** * Root page for embedded and standalone entrypoints. * * When Shopify opens the app it always passes ?shop=<domain> (plus host, hmac, etc). * We use that to do a server-side token lookup ΓÇö no localStorage required. * * Flow: *   ?shop + token found              ΓåÆ render app (shop passed as prop, bypasses localStorage) *   ?shop + no token + embedded      ΓåÆ redirect to exit-iframe ΓåÆ OAuth *   ?shop + no token + NOT embedded  ΓåÆ redirect to OAuth directly *   ?shop + no token + host present  ΓåÆ render app anyway (mobile ITP / cold-start fallback) *   no ?shop                         ΓåÆ render app directly (CSV-only / direct access mode) * * Mobile ITP note: Safari/iOS blocks SameSite=None cookies in some contexts, so * resolveToken() may return null even after a successful OAuth. When `host` is present * (Shopify always sends it for embedded apps) we render the app and let client-side * App Bridge handle the session rather than looping through exit-iframe. */export default async function Home({  searchParams,}: {  searchParams: Promise<{ shop?: string; embedded?: string; host?: string }>;}) {  const params = await searchParams;  const rawShop = params?.shop ?? "";  const shop = normalizeShopifyAdminDomain(rawShop);  if (shop) {    const headersList = await headers();    const cookieHeader = headersList.get("cookie");    const token = await resolveToken(shop, cookieHeader);    if (!token) {      const isEmbedded = params?.embedded === "1";      const hasHost = Boolean(params?.host);      // If Shopify passed `host`, the request is coming from the Shopify admin.      // Render the app directly ΓÇö App Bridge v4 will validate the session client-side.      // This prevents infinite redirect loops when cookies are blocked (mobile ITP).      if (hasHost) {        return <TranslatorApp shopDomain={shop} />;      }      // No host param ΓÇö standalone install / first-time OAuth flow.      if (isEmbedded) {        redirect(`/api/auth/exit-iframe?shop=${encodeURIComponent(shop)}`);      } else {        redirect(`/api/auth/start?shop=${encodeURIComponent(shop)}`);      }    }    // Token found ΓÇö pass shop directly so the app doesn't depend on localStorage.    return <TranslatorApp shopDomain={shop} />;  }  // No ?shop param ΓÇö CSV upload / direct access mode.  return <TranslatorApp />;}
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { resolveToken, normalizeShopifyAdminDomain } from "@/lib/server/shopifyTokenStore";
+import TranslatorApp from "@/components/TranslatorApp";
+
+/**
+ * Root page for embedded and standalone entrypoints.
+ *
+ * When Shopify opens the app it always passes ?shop=<domain> (plus host, hmac, etc).
+ * We use that to do a server-side token lookup — no localStorage required.
+ *
+ * Flow:
+ *   ?shop + token found              → render app (shop passed as prop, bypasses localStorage)
+ *   ?shop + no token + embedded      → redirect to exit-iframe → OAuth
+ *   ?shop + no token + NOT embedded  → redirect to OAuth directly
+ *   ?shop + no token + host present  → render app anyway (mobile ITP / cold-start fallback)
+ *   no ?shop                         → render app directly (CSV-only / direct access mode)
+ *
+ * Mobile ITP note: Safari/iOS blocks SameSite=None cookies in some contexts, so
+ * resolveToken() may return null even after a successful OAuth. When `host` is present
+ * (Shopify always sends it for embedded apps) we render the app and let client-side
+ * App Bridge handle the session rather than looping through exit-iframe.
+ */
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ shop?: string; embedded?: string; host?: string }>;
+}) {
+  const params = await searchParams;
+  const rawShop = params?.shop ?? "";
+  const shop = normalizeShopifyAdminDomain(rawShop);
+
+  if (shop) {
+    const headersList = await headers();
+    const cookieHeader = headersList.get("cookie");
+    const token = await resolveToken(shop, cookieHeader);
+
+    if (!token) {
+      const isEmbedded = params?.embedded === "1";
+      const hasHost = Boolean(params?.host);
+
+      // If Shopify passed `host`, the request is coming from the Shopify admin.
+      // Render the app directly — App Bridge v4 will validate the session client-side.
+      // This prevents infinite redirect loops when cookies are blocked (mobile ITP).
+      if (hasHost) {
+        return <TranslatorApp shopDomain={shop} />;
+      }
+
+      // No host param — standalone install / first-time OAuth flow.
+      if (isEmbedded) {
+        redirect(`/api/auth/exit-iframe?shop=${encodeURIComponent(shop)}`);
+      } else {
+        redirect(`/api/auth/start?shop=${encodeURIComponent(shop)}`);
+      }
+    }
+
+    // Token found — pass shop directly so the app doesn't depend on localStorage.
+    return <TranslatorApp shopDomain={shop} />;
+  }
+
+  // No ?shop param — CSV upload / direct access mode.
+  return <TranslatorApp />;
+}
