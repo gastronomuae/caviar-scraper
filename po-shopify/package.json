@@ -1,0 +1,16 @@
+{
+  "name": "po-shopify",
+  "version": "1.0.0",
+  "description": "Sync Shopify Purchase Orders — update inventory qty and cost per line item",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dry": "DRY_RUN=true node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "fuse.js": "^7.3.0",
+    "pdfjs-dist": "^3.11.174"
+  }
+}
