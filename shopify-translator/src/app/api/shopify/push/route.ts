@@ -161,6 +161,9 @@ async function fetchDigests(
 
 // ── Route handler ──────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  // Absolute-first log — fires before any async work so concurrent requests are traceable
+  console.log("[push/start]");
+
   let body: PushRequest;
   try {
     body = await req.json();
@@ -168,12 +171,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
+  // Log raw incoming type + id immediately after parse, before buildGid or any validation
+  console.log(`[push/incoming] resourceType=${body.resourceType ?? "(missing)"} resourceId=${body.resourceId ?? "(missing)"}`);
+
   const { locale, fields } = body;
   for (const f of fields ?? []) {
     console.log(`[push/input-key] ${f.key}`);
   }
   const resourceId = buildGid(body.resourceType ?? "", body.resourceId ?? "");
-  console.log(`[push/resource] type=${body.resourceType} rawId=${body.resourceId} gid=${resourceId}`);
+  console.log(`[push/gid] ${resourceId}`);
 
   const cleanDomain = (body.shopifyDomain ?? "")
     .replace(/^https?:\/\//i, "").replace(/\/+$/, "").trim();
@@ -208,7 +214,13 @@ export async function POST(req: NextRequest) {
   try {
     // Step 1: Get content digests (Shopify keys, e.g. seo.title — not meta_title)
     const fieldKeys = [...new Set(fields.map((f) => toShopifyTranslatableKey(f.key)))];
-    const digestMap = await fetchDigests(shopifyDomain, shopifyToken, resourceId, locale, fieldKeys);
+    let digestMap: Map<string, string>;
+    try {
+      digestMap = await fetchDigests(shopifyDomain, shopifyToken, resourceId, locale, fieldKeys);
+    } catch (fetchErr) {
+      console.error(`[push/fetchDigests error] resourceId=${resourceId} type=${body.resourceType}`, fetchErr);
+      throw fetchErr;
+    }
 
     // Step 2: Build translation inputs — skip fields with no digest (field not found in Shopify)
     const translations = fields
