@@ -9,6 +9,11 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.103.0",
+    "@tiptap/extension-placeholder": "^3.22.3",
+    "@tiptap/react": "^3.22.3",
+    "@tiptap/starter-kit": "^3.22.3",
+    "@upstash/redis": "^1.37.0",
     "dompurify": "^3.2.4",
     "isomorphic-dompurify": "^2.21.0",
     "next": "^16.2.1",
