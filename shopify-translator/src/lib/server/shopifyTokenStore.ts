@@ -174,11 +174,11 @@ export function getTokenFromCookieHeader(
  */
 async function resolveTokenFromSupabase(shopDomain: string): Promise<string | null> {
   const url = process.env.SUPABASE_URL?.trim();
-  const key = process.env.SUPABASE_ANON_KEY?.trim();
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY)?.trim();
   if (!url || !key) return null;
   try {
     const { createClient } = await import("@supabase/supabase-js");
-    const sb = createClient(url, key);
+    const sb = createClient(url, key, { auth: { persistSession: false } });
     const { data, error } = await sb
       .from("stores")
       .select("access_token")

@@ -1,19 +1,21 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-// Client is created lazily on first use so Next.js static build analysis
-// can import this module without SUPABASE_URL / SUPABASE_ANON_KEY being set.
+// All Supabase access in this app is server-side only (API routes + server libs).
+// Use the service role key so RLS policies do not interfere with internal reads/writes.
+// NEVER expose SUPABASE_SERVICE_ROLE_KEY to the browser.
 let _client: SupabaseClient | null = null;
 
 function getClient(): SupabaseClient {
   if (_client) return _client;
   const url = process.env.SUPABASE_URL?.trim();
-  const key = process.env.SUPABASE_ANON_KEY?.trim();
+  // Prefer service role key (bypasses RLS); fall back to anon key for local dev without service key.
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY)?.trim();
   if (!url || !key) {
     throw new Error(
-      "Missing Supabase environment variables. Set SUPABASE_URL and SUPABASE_ANON_KEY.",
+      "Missing Supabase environment variables. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
     );
   }
-  _client = createClient(url, key);
+  _client = createClient(url, key, { auth: { persistSession: false } });
   return _client;
 }
 

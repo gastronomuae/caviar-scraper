@@ -107,7 +107,8 @@ export async function markTypeBackedUp(
     );
 
   if (error) {
-    throw new Error(`[shopifyBackupStore] markTypeBackedUp failed: ${error.message}`);
+    // Non-fatal: backup metadata failure must not crash the sync pipeline.
+    console.warn(`[shopifyBackupStore] markTypeBackedUp failed (continuing): ${error.message}`);
   }
 }
 
@@ -239,6 +240,6 @@ export async function deleteBackup(
 
   const { error } = await query;
   if (error) {
-    throw new Error(`[shopifyBackupStore] deleteBackup failed: ${error.message}`);
+    console.warn(`[shopifyBackupStore] deleteBackup failed: ${error.message}`);
   }
 }
