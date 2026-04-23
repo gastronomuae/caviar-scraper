@@ -1446,30 +1446,13 @@ app.post('/api/ubazar/run', async (req, res) => {
       result.counts.supplier_delta_updated = delta.updated.length;
       result.steps.push({ step: 'supplier_delta', ok: true, counts: { added: delta.added.length, removed: delta.removed.length, updated: delta.updated.length }, delta });
 
-      // Step 5: draft UNPAIRED Gastronom products (not mapped to any UBazar item)
+      // Step 5: draft unpaired Gastronom products — SKIPPED intentionally.
+      // Only products that ARE in the mapping are touched (activated/drafted/synced).
+      // Unmapped Gastronom products in the same collection are left as-is.
       const mapping = loadUbazarMapping();
-      const mappedTargets = new Set(Object.values(mapping || {}).map((x) => String(x || '').trim()).filter(Boolean));
-      const gastronom = loadGastronomUzbekProducts();
-      const unpairedHandles = gastronom
-        .map((p) => String(p?.handle || '').trim())
-        .filter(Boolean)
-        .filter((h) => !mappedTargets.has(h));
-
-      const drafted = [];
-      const draftFailed = [];
-      for (const gastroHandle of unpairedHandles) {
-        try {
-          const gid = await resolveShopifyProductGidByHandleLive(gastroHandle);
-          if (!gid) throw new Error(`No Shopify product found by handle: ${gastroHandle}`);
-          await setProductStatus(gid, 'DRAFT');
-          drafted.push({ gastronom_handle: gastroHandle });
-        } catch (e) {
-          draftFailed.push({ gastronom_handle: gastroHandle, error: String(e.message || e) });
-        }
-      }
-      result.counts.drafted_unpaired_gastronom = drafted.length;
-      result.counts.drafted_unpaired_failed = draftFailed.length;
-      result.steps.push({ step: 'draft_unpaired_gastronom', ok: draftFailed.length === 0, drafted, failed: draftFailed });
+      result.counts.drafted_unpaired_gastronom = 0;
+      result.counts.drafted_unpaired_failed = 0;
+      result.steps.push({ step: 'draft_unpaired_gastronom', ok: true, skipped: true, note: 'Unmapped products are not modified' });
 
       // Step 6: for each mapped pair — ACTIVE+sync if UBazar present & available, else DRAFT
       const ubazarByHandle = new Map((Array.isArray(ubazarAfter) ? ubazarAfter : []).map((x) => [String(x?.handle || '').trim(), x]));
