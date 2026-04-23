@@ -203,15 +203,45 @@ function diffRows(prev, next) {
   return { added, removed, updated };
 }
 
+/**
+ * Discover the first category URL from the UBazar homepage nav.
+ * The numeric suffix (e.g. `-4`) can change; this always finds the current live URL.
+ * Returns null if discovery fails (non-blocking).
+ */
+async function discoverFirstCategoryUrl() {
+  try {
+    const html = await fetchText(BASE);
+    // Match the first /categories/... href in the page (appears in nav dropdown)
+    const m = html.match(/href="(\/categories\/[^"]+)"/);
+    if (m) return `${BASE}${m[1]}`;
+  } catch (_) {}
+  return null;
+}
+
 async function fetchAllProducts() {
   const byId = new Map();
+  /** Set of numeric IDs found on website category pages (not just API). */
+  const websiteFoundIds = new Set();
   const categoryResults = [];
 
-  for (const catUrl of TARGET_CATEGORY_URLS) {
+  // Discover the first category URL from the homepage (dynamic, handles URL changes).
+  let discoveredCategoryUrl = null;
+  try {
+    discoveredCategoryUrl = await discoverFirstCategoryUrl();
+  } catch (_) {}
+
+  // Build the full list of category URLs to scrape.
+  const allCategoryUrls = [...TARGET_CATEGORY_URLS];
+  if (discoveredCategoryUrl && !allCategoryUrls.includes(discoveredCategoryUrl)) {
+    allCategoryUrls.unshift(discoveredCategoryUrl); // Check homepage-discovered URL first
+  }
+
+  for (const catUrl of allCategoryUrls) {
     try {
       const products = await fetchCategoryProducts(catUrl);
       categoryResults.push({ url: catUrl, count: products.length });
       for (const p of products) {
+        websiteFoundIds.add(p.handle);
         if (!byId.has(p.handle)) byId.set(p.handle, p);
       }
     } catch (e) {
@@ -241,11 +271,24 @@ async function fetchAllProducts() {
       const prod = data?.message?.product;
       if (prod && prod.id) {
         const normalized = normalizeApiProduct(prod);
-        if (normalized) byId.set(normalized.handle, normalized);
+        if (normalized) {
+          // Product found via API but NOT on any website category page.
+          // Mark as unavailable so Gastronom reflects the website state.
+          if (!websiteFoundIds.has(normalized.handle)) {
+            normalized.available = false;
+            normalized.website_visible = false;
+          }
+          byId.set(normalized.handle, normalized);
+        }
       }
     } catch (_) {
       // Product gone or API unavailable — will be drafted.
     }
+  }
+
+  // Mark all website-found products explicitly.
+  for (const [handle, p] of byId) {
+    if (websiteFoundIds.has(handle)) p.website_visible = true;
   }
 
   try {
@@ -253,6 +296,7 @@ async function fetchAllProducts() {
     fs.writeFileSync(CATEGORY_INDEX_PATH, JSON.stringify({
       scraped_at: new Date().toISOString(),
       source: BASE,
+      discovered_category_url: discoveredCategoryUrl,
       categories: categoryResults
     }, null, 2), 'utf8');
   } catch (_) {
@@ -260,11 +304,12 @@ async function fetchAllProducts() {
   }
 
   const products = [...byId.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'en'));
-  return { products, categoryResults };
+  return { products, categoryResults, discoveredCategoryUrl };
 }
 
 async function main() {
-  const { products, categoryResults } = await fetchAllProducts();
+  const { products, categoryResults, discoveredCategoryUrl } = await fetchAllProducts();
+  if (discoveredCategoryUrl) console.log(`UBazar: discovered category URL: ${discoveredCategoryUrl}`);
 
   const prev = readJsonIfExists(OUT, []);
   const prevArr = Array.isArray(prev) ? prev : [];
@@ -281,7 +326,9 @@ async function main() {
     delta
   }, null, 2), 'utf8');
 
+  const hiddenCount = products.filter(p => p.website_visible === false).length;
   console.log(`UBazar: saved ${products.length} products -> ${OUT}`);
+  if (hiddenCount > 0) console.log(`UBazar: ${hiddenCount} product(s) found via API only (not on website) → marked unavailable`);
   console.log(`UBazar delta: +${delta.added.length} ~${delta.updated.length} -${delta.removed.length} -> ${OUT_DELTA}`);
 }
 
