@@ -211,8 +211,9 @@ function diffRows(prev, next) {
 async function discoverFirstCategoryUrl() {
   try {
     const html = await fetchText(BASE);
-    // Match the first /categories/... href in the page (appears in nav dropdown)
-    const m = html.match(/href="(\/categories\/[^"]+)"/);
+    // Match the first real category URL — must end with a numeric suffix (e.g. /categories/ovoschi-i-frukty-4).
+    // Skips generic pages like /categories/list.
+    const m = html.match(/href="(\/categories\/[^"]*-\d+)"/);
     if (m) return `${BASE}${m[1]}`;
   } catch (_) {}
   return null;
