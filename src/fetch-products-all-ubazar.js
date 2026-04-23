@@ -110,10 +110,10 @@ function normalizeApiProduct(p) {
   const regular_price = hasValidOldPrice ? oldPriceRaw : (hasValidPrice ? priceRaw : null);
 
   const inStock = p.in_stock != null ? Number(p.in_stock) : null;
-  // Use in_stock as the primary availability signal.
-  // active=no with stock > 0 still means available (UBazar may use active as a display toggle).
-  // Only mark unavailable when stock is explicitly 0 (and not null/undefined).
-  const available = inStock == null ? p.active === 'yes' : inStock > 0;
+  // active=no means the product is hidden on the website regardless of stock level.
+  // A product is only available if BOTH active=yes AND in_stock > 0 (or stock unknown).
+  const activeOnSite = p.active === 'yes';
+  const available = activeOnSite && (inStock == null || inStock > 0);
 
   let image = p.image || null;
   if (image && !image.startsWith('http')) {
@@ -273,10 +273,9 @@ async function fetchAllProducts() {
       if (prod && prod.id) {
         const normalized = normalizeApiProduct(prod);
         if (normalized) {
-          // Product found via API but NOT on any website category page.
-          // Mark as unavailable so Gastronom reflects the website state.
+          // Track website visibility (informational).
+          // active=no products are already marked available=false by normalizeApiProduct.
           if (!websiteFoundIds.has(normalized.handle)) {
-            normalized.available = false;
             normalized.website_visible = false;
           }
           byId.set(normalized.handle, normalized);
@@ -328,8 +327,10 @@ async function main() {
   }, null, 2), 'utf8');
 
   const hiddenCount = products.filter(p => p.website_visible === false).length;
+  const inactiveCount = products.filter(p => p.available === false).length;
   console.log(`UBazar: saved ${products.length} products -> ${OUT}`);
-  if (hiddenCount > 0) console.log(`UBazar: ${hiddenCount} product(s) found via API only (not on website) → marked unavailable`);
+  if (hiddenCount > 0) console.log(`UBazar: ${hiddenCount} product(s) not visible on website (active=no or not in category pages)`);
+  if (inactiveCount > 0) console.log(`UBazar: ${inactiveCount} product(s) marked unavailable (will be drafted on Gastronom)`);
   console.log(`UBazar delta: +${delta.added.length} ~${delta.updated.length} -${delta.removed.length} -> ${OUT_DELTA}`);
 }
 
